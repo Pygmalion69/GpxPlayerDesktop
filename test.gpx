@@ -1,0 +1,19 @@
+<gpx xmlns="http://www.topografix.com/GPX/1/1" creator="RouteYou" version="1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+	<trk>
+		<name>Test</name>
+		<desc>Test</desc>
+		<trkseg>
+			<trkpt lat="51.77788" lon="5.98277">
+				<ele>15</ele>
+			</trkpt>
+			<trkpt lat="51.77792" lon="5.98208">
+				<ele>15</ele>
+			</trkpt>
+			<trkpt lat="51.77789" lon="5.98208">
+				<ele>15</ele>
+			</trkpt>
+		
+		</trkseg>
+	</trk>
+</gpx>
+
