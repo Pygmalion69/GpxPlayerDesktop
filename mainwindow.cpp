@@ -10,7 +10,6 @@
 #include <QTextEdit>
 #include <QProcess>
 
-
 MainWindow::MainWindow(QWidget* parent)
 	: QMainWindow(parent), speedKmh(60)
 {
@@ -137,18 +136,14 @@ void MainWindow::drawTrack() {
 	// Create a JavaScript array of coordinate pairs for the polyline
 	QString js = "var latlngs = [";
 	for (int i = 0; i < trackPoints.size(); i++) {
-		double lat = trackPoints[i].first;
-		double lon = trackPoints[i].second;
+		QString lat = QString::number(trackPoints[i].first, 'f', 6);
+		QString lon = QString::number(trackPoints[i].second, 'f', 6);
 		js += QString("[%1, %2],").arg(lat).arg(lon);
 	}
 	// Remove the trailing comma and close the array
 	js.chop(1);
 	js += "];";
-	// Add the polyline to the map using the array of coordinate pairs
-	//js += "let polyline = L.polyline(latlngs);";
-	//js += "polyline.addTo(map);";
-	//js += "map.fitBounds(polyline.getBounds());";
-
+	
 	// Create or update the polyline on the map using the array of coordinate pairs
 	js += "if (typeof polyline === 'undefined') {";
 	js += "  polyline = L.polyline(latlngs);";
@@ -165,7 +160,7 @@ void MainWindow::drawTrack() {
 }
 
 void MainWindow::refineTrack() {
-	const int interval = 10;
+	const double interval = 10;
 	refinedTrackPoints.clear();
 	if (trackPoints.size() > 0) {
 		QPair<double, double> prevTrackPoint = trackPoints[0];
@@ -173,11 +168,12 @@ void MainWindow::refineTrack() {
 		qDebug("First track point added: %.6f, %.6f", prevTrackPoint.first, prevTrackPoint.second);
 		for (int i = 1; i < trackPoints.count(); ++i) {
 			QPair<double, double> trackPoint = trackPoints[i];
-			double distance = calculateDistance(prevTrackPoint.first, prevTrackPoint.second, trackPoint.first, trackPoint.second);		
+			long double distance = calculateDistance(prevTrackPoint.first, prevTrackPoint.second, trackPoint.first, trackPoint.second);		
 			if (distance > interval) {
 				double deltaLat = trackPoint.first - prevTrackPoint.first;
 				double deltaLon = trackPoint.second - prevTrackPoint.second;
 				double fraction = interval / distance;
+				qDebug("deltaLat: % .6f, deltaLon: % .6f, fraction: % .6f, fraction * deltaLon: % .6f", deltaLat, deltaLon, fraction, fraction * deltaLon);
 				int numNewPoints = (int)(distance / interval);
 				for (int j = 1; j <= numNewPoints; ++j) {
 					double lat = prevTrackPoint.first + (j * fraction * deltaLat);
@@ -193,7 +189,6 @@ void MainWindow::refineTrack() {
 	}
 
 }
-
 
 // Define the "playGpxFile" function to loop through the list of track points
 void MainWindow::playGpxFile()
@@ -213,7 +208,6 @@ void MainWindow::playGpxFile()
 	refineTrack();
 
 	currentIndex = 0;
-
 
 	// Create the marker and add it to the map
 	QString js = "var marker = L.marker([0, 0]).addTo(map);";
@@ -318,8 +312,9 @@ void MainWindow::startAndroidApp() {
 void MainWindow::sendIntent(double latitude, double longitude) {
 	
 	QString adbCmd = "shell am broadcast -n org.nitri.gpxplayer/.MockLocationReceiver -a org.nitri.gpxplayer.ACTION_SET_LOCATION -d ";
-	adbCmd += QString("geo:%1,%2").arg(latitude).arg(longitude);
-
+	QString lat = QString::number(latitude, 'f', 6);
+	QString lon = QString::number(longitude, 'f', 6);
+	adbCmd += QString("geo:%1,%2").arg(lat).arg(lon);
 	runAdbCommand(adbCmd);
 }
 
