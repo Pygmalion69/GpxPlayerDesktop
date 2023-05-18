@@ -8,6 +8,7 @@
 #include <QSettings>
 #include <QTextEdit>
 #include <QProcess>
+#include <QWebEngineSettings>
 
 MainWindow::MainWindow(QWidget* parent)
 	: QMainWindow(parent), speedKmh(60)
@@ -15,6 +16,8 @@ MainWindow::MainWindow(QWidget* parent)
 	settings = new QSettings(tr("nitri.org"), tr("GpxPlayer"));
 	// Create the web-based map view using Leaflet
 	mapView = new QWebEngineView(this);
+	QWebEngineSettings* mapViewSettings = mapView->settings();
+	mapViewSettings->setAttribute(QWebEngineSettings::ShowScrollBars, false);
 	connect(mapView, &QWebEngineView::loadFinished, this, &MainWindow::onLoadFinished);
 	mapView->load(QUrl::fromLocalFile(QApplication::applicationDirPath() + "/map.html"));
 
