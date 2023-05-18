@@ -10,6 +10,7 @@
 #include <QTextEdit>
 #include <QSettings>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 
 
 
@@ -38,10 +39,12 @@ private:
     int currentIndex;
     double speedKmh;
     bool playing = false;
+    bool firstIntentSent = false;
     QSlider* speedSlider;
     QLabel* speedLabel;
     QTextEdit* outputTextEdit;
     QSettings* settings;
+    QElapsedTimer* intentElapsedTimer;
 
     void addTrackPoint(QXmlStreamReader&);
     void drawTrack();

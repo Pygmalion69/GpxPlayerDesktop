@@ -4,7 +4,6 @@
 #include <QApplication>
 #include <QTimer>
 #include <qmath.h>
-#include <QElapsedTimer>
 #include <QVboxLayout>
 #include <QSettings>
 #include <QTextEdit>
@@ -204,6 +203,7 @@ void MainWindow::playGpxFile()
 	}
 
 	playing = true;
+	firstIntentSent = false;
 
 	refineTrack();
 
@@ -215,6 +215,7 @@ void MainWindow::playGpxFile()
 
 	// Define a timer to update the map with the current track point every 500 milliseconds
 	timer = new QTimer(this);
+	intentElapsedTimer = new QElapsedTimer();
 	connect(timer, &QTimer::timeout, this, [=]() {
 		qDebug() << "currentIndex == " << currentIndex;
 		if (currentIndex >= refinedTrackPoints.size() - 1) {
@@ -237,7 +238,7 @@ void MainWindow::playGpxFile()
 		double interval = distance / (speedKmh / 3.6) * 1000; // in milliseconds
 		qDebug() << "interval == " << interval;
 
-		// Measure the time it takes to execute the JavaScript code
+		// Measure the time it takes to execute the JavaScript code and send the intent
 		QElapsedTimer elapsedTimer;
 		elapsedTimer.start();
 
@@ -247,12 +248,16 @@ void MainWindow::playGpxFile()
 		QApplication::processEvents(); // Allow Qt to update the UI
 		mapView->page()->runJavaScript(js);
 
-		// Subtract the elapsed time from the timer interval
-		interval -= elapsedTimer.elapsed();
-
-		sendIntent(lat1, lon1);
+		if (!firstIntentSent || intentElapsedTimer->elapsed() > 800) {
+			intentElapsedTimer->start();
+			sendIntent(lat1, lon1);
+			firstIntentSent = true;
+		}
 
 		currentIndex++;
+
+		// Subtract the elapsed time from the timer interval
+		interval -= elapsedTimer.elapsed();
 
 		if (interval < 0) {
 			interval = 0;
@@ -281,8 +286,10 @@ double MainWindow::calculateDistance(double lat1, double lon1, double lat2, doub
 void MainWindow::stopPlayGpxFile() {
 	if (playing) {
 		timer->stop();
+		delete intentElapsedTimer;
 		QMessageBox::information(this, tr("Info"), tr("Playback stopped."));
 		playing = false;
+		firstIntentSent = false;
 		QString js = "map.removeLayer(marker);";
 		mapView->page()->runJavaScript(js);
 	}
@@ -311,10 +318,11 @@ void MainWindow::startAndroidApp() {
 
 void MainWindow::sendIntent(double latitude, double longitude) {
 	
-	QString adbCmd = "shell am broadcast -n org.nitri.gpxplayer/.MockLocationReceiver -a org.nitri.gpxplayer.ACTION_SET_LOCATION -d ";
+	QString adbCmd = "shell \"am broadcast -n org.nitri.gpxplayer/.MockLocationReceiver -a org.nitri.gpxplayer.ACTION_SET_LOCATION -d ";
 	QString lat = QString::number(latitude, 'f', 6);
 	QString lon = QString::number(longitude, 'f', 6);
 	adbCmd += QString("geo:%1,%2").arg(lat).arg(lon);
+	adbCmd += QString(" --ei speed %1\"").arg((int) speedKmh);
 	runAdbCommand(adbCmd);
 }
 
