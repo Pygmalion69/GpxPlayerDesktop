@@ -1,2 +1,2 @@
 # GpxPlayerDesktop
-Desktop app to mock GPX tracks on Android devices
+Desktop app to mock GPX tracks on Android devices.
