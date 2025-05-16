@@ -68,6 +68,7 @@ fun App() {
     val webEngine = remember { mutableStateOf<WebEngine?>(null) }
 
     adbPath = getSavedAdbPath() ?: "/usr/bin/adb"
+    startAndroidApp()
 
     MaterialTheme(colors = AppColorPalette) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -93,7 +94,6 @@ fun App() {
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // ✅ adbPath label
                     Text(
                         adbPath,
                         style = MaterialTheme.typography.caption,
@@ -338,14 +338,46 @@ fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): D
     return R * c * 1000 // Distance in meters
 }
 
-fun sendIntent(latitude: Double, longitude: Double, speedKmh: Int) {
-    val adbCommand = """shell "am broadcast -n org.nitri.gpxplayer/.MockLocationReceiver \
-        -a org.nitri.gpxplayer.ACTION_SET_LOCATION -d geo:$latitude,$longitude --ei speed $speedKmh""""
+fun startAndroidApp() {
+    val adbCommand = "shell am start -n org.nitri.gpxplayer/.MainActivity"
 
-    ProcessBuilder(adbPath, *adbCommand.split(" ").toTypedArray())
-        .redirectErrorStream(true)
-        .start()
-        .waitFor()
+    try {
+        val process = ProcessBuilder(adbPath, *adbCommand.split(" ").toTypedArray())
+            .redirectErrorStream(true)
+            .start()
+
+        val exitCode = process.waitFor()
+        println("📱 Launched Android app, exit code: $exitCode")
+    } catch (e: Exception) {
+        println("❌ Failed to launch Android app: ${e.message}")
+    }
+}
+
+fun sendIntent(latitude: Double, longitude: Double, speedKmh: Int) {
+    val adbArgs = listOf(
+        "shell",
+        "am", "broadcast",
+        "-n", "org.nitri.gpxplayer/.MockLocationReceiver",
+        "-a", "org.nitri.gpxplayer.ACTION_SET_LOCATION",
+        "-d", "geo:$latitude,$longitude",
+        "--ei", "speed", "$speedKmh"
+    )
+
+    println("🚀 Sending: $adbPath ${adbArgs.joinToString(" ")}")
+
+    try {
+        val process = ProcessBuilder(adbPath, *adbArgs.toTypedArray())
+            .redirectErrorStream(true)
+            .start()
+
+        val output = process.inputStream.bufferedReader().readText()
+        val exitCode = process.waitFor()
+
+        println("📱 Sent geo intent, exit code: $exitCode")
+        println(output)
+    } catch (e: Exception) {
+        println("❌ Failed to send geo intent: ${e.message}")
+    }
 }
 
 fun refineTrack(trackPoints: List<Pair<Double, Double>>, intervalMeters: Double = 10.0): List<Pair<Double, Double>> {
