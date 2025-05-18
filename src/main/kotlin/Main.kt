@@ -143,7 +143,7 @@ fun App() {
 
             Row {
                 Button(
-                    onClick = { playGpxFile(webEngine.value, speed.toInt()) },
+                    onClick = { playGpxFile(webEngine.value) { speed.toInt() } },
                     colors = ButtonDefaults.buttonColors(contentColor = Color.White)
                 ) {
                     Text("Play")
@@ -426,54 +426,54 @@ fun calculateHeading(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Do
     return (Math.toDegrees(headingRad) + 360) % 360
 }
 
-fun playGpxFile(webEngine: WebEngine?, speedKmh: Int) {
-    if (refinedTrackPoints.isEmpty()) {
-        println("❌ No track points loaded.")
-        return
-    }
-
-    if (playing) return
+fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int) {
+    if (refinedTrackPoints.isEmpty() || playing) return
 
     playing = true
     firstIntentSent = false
     currentIndex = 0
 
-    playbackTimer = Timer()
-    playbackTimer?.scheduleAtFixedRate(object : TimerTask() {
-        override fun run() {
-            if (currentIndex >= refinedTrackPoints.size - 1) {
-                playbackTimer?.cancel()
-                println("✅ Playback finished.")
-                playing = false
-                sendJavaScriptCommand(webEngine, "map.removeLayer(marker);")
-                return
-            }
-
-            val (lat1, lon1) = refinedTrackPoints[currentIndex]
-            val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
-
-            val distance = calculateDistance(lat1, lon1, lat2, lon2)
-            val interval = (distance / (speedKmh / 3.6) * 1000).toLong()
-
-            println("📍 Moving to: ($lat1, $lon1), Distance: $distance meters, Interval: $interval ms")
-
-            val heading = calculateHeading(lat1, lon1, lat2, lon2)
-            val jsCommand = """
-    marker.setLatLng([${lat1}, ${lon1}]);
-    marker.setRotationAngle(${heading});
-    marker.setOpacity(1);
-""".trimIndent()
-            sendJavaScriptCommand(webEngine, jsCommand)
-
-            if (!firstIntentSent || System.currentTimeMillis() - lastIntentSentTime > 800) {
-                sendIntent(lat1, lon1, speedKmh)
-                firstIntentSent = true
-                lastIntentSentTime = System.currentTimeMillis()
-            }
-
-            currentIndex++
+    fun scheduleNextStep() {
+        if (!playing || currentIndex >= refinedTrackPoints.size - 1) {
+            playing = false
+            sendJavaScriptCommand(webEngine, "map.removeLayer(marker);")
+            println("✅ Playback finished.")
+            return
         }
-    }, 0, 500) // Start immediately, then update every 500ms
+
+        val (lat1, lon1) = refinedTrackPoints[currentIndex]
+        val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
+        val distance = calculateDistance(lat1, lon1, lat2, lon2)
+        val currentSpeedKmh = speedProvider().coerceAtLeast(1) // avoid division by zero
+        val interval = ((distance / (currentSpeedKmh / 3.6)) * 1000).toLong()
+
+        println("📍 Moving to: ($lat1, $lon1), Speed: $currentSpeedKmh km/h, Interval: $interval ms")
+
+        val heading = calculateHeading(lat1, lon1, lat2, lon2)
+        val jsCommand = """
+            marker.setLatLng([$lat1, $lon1]);
+            marker.setRotationAngle($heading);
+            marker.setOpacity(1);
+        """.trimIndent()
+        sendJavaScriptCommand(webEngine, jsCommand)
+
+        if (!firstIntentSent || System.currentTimeMillis() - lastIntentSentTime > 800) {
+            sendIntent(lat1, lon1, currentSpeedKmh)
+            firstIntentSent = true
+            lastIntentSentTime = System.currentTimeMillis()
+        }
+
+        currentIndex++
+
+        // Schedule next step dynamically
+        Timer().schedule(object : TimerTask() {
+            override fun run() {
+                scheduleNextStep()
+            }
+        }, interval)
+    }
+
+    scheduleNextStep()
 }
 
 fun stopPlayGpxFile(webEngine: WebEngine?) {
