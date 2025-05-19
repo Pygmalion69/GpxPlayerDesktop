@@ -296,7 +296,7 @@ fun sendGpxToMap(webEngine: WebEngine?, trackPoints: List<Pair<Double, Double>>)
 
     Platform.runLater {
         webEngine?.executeScript(jsCommand)
-        webEngine?.let{makerToStart(it)}
+        webEngine?.let{markerToStart(it)}
     }
 }
 
@@ -436,7 +436,6 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int) {
     fun scheduleNextStep() {
         if (!playing || currentIndex >= refinedTrackPoints.size - 1) {
             playing = false
-            sendJavaScriptCommand(webEngine, "map.removeLayer(marker);")
             println("✅ Playback finished.")
             return
         }
@@ -484,13 +483,25 @@ fun stopPlayGpxFile(webEngine: WebEngine?) {
         playing = false
         firstIntentSent = false
         webEngine?.let {
-            makerToStart(it)
+           markerToStart(it)
         }
     }
 }
 
-private fun makerToStart(webEngine: WebEngine) {
-    sendJavaScriptCommand(webEngine, "marker.setLatLng([${refinedTrackPoints.first().first}, ${refinedTrackPoints.first().second}]);marker.setOpacity(1);")
+private fun markerToStart(webEngine: WebEngine) {
+    val (lat1, lon1) = refinedTrackPoints.firstOrNull() ?: return
+    val heading = if (refinedTrackPoints.size >= 2) {
+        val (lat2, lon2) = refinedTrackPoints[1]
+        calculateHeading(lat1, lon1, lat2, lon2)
+    } else 0.0
+
+    val js = """
+        marker.setLatLng([$lat1, $lon1]);
+        marker.setRotationAngle($heading);
+        marker.setOpacity(1);
+    """.trimIndent()
+
+    sendJavaScriptCommand(webEngine, js)
 }
 
 fun main() = application {
