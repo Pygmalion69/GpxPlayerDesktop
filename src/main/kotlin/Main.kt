@@ -64,6 +64,7 @@ fun App() {
     var speed by remember { mutableStateOf(60f) }
     var logMessages by remember { mutableStateOf(listOf<String>()) }
     var selectedFile by remember { mutableStateOf<String?>(null) }
+    var playing by remember { mutableStateOf(false) }
 
     val webEngine = remember { mutableStateOf<WebEngine?>(null) }
 
@@ -82,7 +83,8 @@ fun App() {
                     selectedFile = openFilePicker(webEngine.value)
                     logMessages = logMessages + "Selected file: ${selectedFile ?: "None"}"
 
-                }, colors = ButtonDefaults.buttonColors(contentColor = Color.White)) {
+                }, colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                    enabled = !playing) {
                     Text("Load GPX")
                 }
 
@@ -143,15 +145,19 @@ fun App() {
 
             Row {
                 Button(
-                    onClick = { playGpxFile(webEngine.value) { speed.toInt() } },
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White)
+                    onClick = { playing = true
+                                playGpxFile(webEngine.value) { speed.toInt() } },
+                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                    enabled = (!playing && !refinedTrackPoints.isEmpty())
                 ) {
                     Text("Play")
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
-                    onClick = { stopPlayGpxFile(webEngine.value) },
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White)
+                    onClick = { playing = false
+                                stopPlayGpxFile(webEngine.value) },
+                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                    enabled = playing
                 ) {
                     Text("Stop")
                 }
