@@ -30,3 +30,9 @@ jobs:
       - name: 📦 Package app for current OS
         run: ./gradlew packageReleaseDistributionForCurrentOS
 
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-binaries
+          path: build/compose/binaries
+
