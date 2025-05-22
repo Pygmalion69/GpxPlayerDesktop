@@ -10,7 +10,7 @@ GpxPlayerDesktop is a modern desktop application built with Kotlin and Jetpack C
 - 🛰️ Simulated playback with speed control
 - 🎯 Location marker with heading orientation
 - 📡 ADB integration to send mock locations to connected Android devices
-- ☁️ Interface with [GpxPlayer for Android](https://github.com/nitri/GpxPlayer)
+- ☁️ Interface with [GpxPlayer for Android](https://github.com/Pygmalion69/GpxPlayerAndroid)
 - 🌍 Interactive map (Leaflet.js) embedded via JavaFX WebView
 - 💾 Persistent ADB path configuration
 - 🖥️ Cross-platform support (Windows/Linux)
