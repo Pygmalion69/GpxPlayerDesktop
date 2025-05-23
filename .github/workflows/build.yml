@@ -36,7 +36,7 @@ jobs:
         run: ./gradlew packageReleaseDistributionForCurrentOS
 
       - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ runner.os }}
           path: build/compose/binaries
