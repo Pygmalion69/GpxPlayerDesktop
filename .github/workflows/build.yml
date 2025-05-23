@@ -34,6 +34,15 @@ jobs:
 
       - name: 📦 Package app
         run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace
+        continue-on-error: true
+
+      - name: 📥 Upload Windows error logs (if any)
+        if: runner.os == 'Windows' && failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-error-logs
+          path: build/compose/logs/packageReleaseExe/*.txt
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v4
