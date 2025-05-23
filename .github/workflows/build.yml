@@ -30,10 +30,10 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: 🧪 Build project
-        run: ./gradlew build
+        run: ./gradlew build --stacktrace
 
       - name: 📦 Package app
-        run: ./gradlew packageReleaseDistributionForCurrentOS
+        run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v4

@@ -16,6 +16,12 @@ repositories {
     google()
 }
 
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
 javafx {
     version = "17.0.2"
     modules = listOf("javafx.web", "javafx.swing") // This includes javafx.controls and javafx.graphics automatically
