@@ -54,8 +54,7 @@ compose.desktop {
         mainClass = "MainKt"
         nativeDistributions {
             targetFormats(
-                TargetFormat.Dmg,
-                TargetFormat.Msi,
+                TargetFormat.Exe,
                 TargetFormat.Deb)
             packageName = "GpxPlayer"
             packageVersion = "1.0.0"
