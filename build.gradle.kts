@@ -69,7 +69,7 @@ compose.desktop {
             }
             windows {
                 menuGroup = "Gpx Tools"
-                upgradeUuid = "com.example.gpxplayer"
+                upgradeUuid = "036e985e-48cc-4036-8652-088fc5db44e5"
                 iconFile.set(project.file("assets/GpxPlayer.ico"))
             }
         }
