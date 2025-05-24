@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.util.UUID
 
 plugins {
     kotlin("jvm")
@@ -69,7 +70,7 @@ compose.desktop {
             }
             windows {
                 menuGroup = "Gpx Tools"
-                upgradeUuid = "036e985e-48cc-4036-8652-088fc5db44e5"
+                upgradeUuid = UUID.randomUUID().toString()
                 iconFile.set(project.file("assets/GpxPlayer.ico"))
             }
         }
