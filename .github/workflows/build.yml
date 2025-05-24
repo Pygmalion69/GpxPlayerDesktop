@@ -30,19 +30,10 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: 🧪 Build project
-        run: ./gradlew build --stacktrace
+        run: ./gradlew build
 
       - name: 📦 Package app
-        run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace
-        continue-on-error: true
-
-      - name: 📥 Upload Windows error logs (if any)
-        if: runner.os == 'Windows' && failure()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-error-logs
-          path: build/compose/logs/packageReleaseExe/*.txt
+        run: ./gradlew packageReleaseDistributionForCurrentOS
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v4
