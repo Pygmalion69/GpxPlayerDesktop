@@ -34,6 +34,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import androidx.compose.material.icons.Icons
 
 var playing = false
 var firstIntentSent = false
@@ -62,9 +63,11 @@ fun initializeJavaFX() {
 @Preview
 fun App() {
     var speed by remember { mutableStateOf(60f) }
+    var position = remember { mutableStateOf(0f) }
     var logMessages by remember { mutableStateOf(listOf<String>()) }
     var selectedFile by remember { mutableStateOf<String?>(null) }
-    var playing by remember { mutableStateOf(false) }
+    var playing = remember { mutableStateOf(false) }
+    var paused by remember { mutableStateOf(false) }
 
     val webEngine = remember { mutableStateOf<WebEngine?>(null) }
 
@@ -80,11 +83,11 @@ fun App() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(onClick = {
-                    selectedFile = openFilePicker(webEngine.value)
+                    selectedFile = openFilePicker(webEngine.value, { position })
                     logMessages = logMessages + "Selected file: ${selectedFile ?: "None"}"
 
                 }, colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                    enabled = !playing) {
+                    enabled = !playing.value) {
                     Text("Load GPX")
                 }
 
@@ -143,27 +146,79 @@ fun App() {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Row {
-                Button(
-                    onClick = { playing = true
-                                playGpxFile(webEngine.value) { speed.toInt() } },
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                    enabled = (!playing && !refinedTrackPoints.isEmpty())
-                ) {
-                    Text("Play")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = { playing = false
-                                stopPlayGpxFile(webEngine.value) },
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                    enabled = playing
-                ) {
-                    Text("Stop")
-                }
-            }
+            Text("Position: ${position.value.toInt()} %")
+            Slider(
+                value = position.value,
+                onValueChange = {
+                    position.value = it
+
+                    if (refinedTrackPoints.isNotEmpty()) {
+                        val index = (position.value / 100f * (refinedTrackPoints.lastIndex)).toInt()
+                            .coerceIn(0, refinedTrackPoints.lastIndex)
+                        currentIndex = index
+
+                        val (lat1, lon1) = refinedTrackPoints[index]
+                        val (lat2, lon2) = refinedTrackPoints.getOrNull(index + 1) ?: refinedTrackPoints[index]
+
+                        val heading = calculateHeading(lat1, lon1, lat2, lon2)
+
+                        val js = """
+                marker.setLatLng([$lat1, $lon1]);
+                marker.setRotationAngle($heading);
+                marker.setOpacity(1);
+            """.trimIndent()
+                        sendJavaScriptCommand(webEngine.value, js)
+
+                        sendIntent(lat1, lon1, speed.toInt())
+                    }
+                },
+                valueRange = 0f..100f,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !refinedTrackPoints.isEmpty()
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            Row {
+                Button(
+                    onClick = {
+                        if (!playing.value) {
+                            playing.value = true
+                            paused = false
+                            playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
+                        } else {
+                            paused = !paused
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                    enabled = refinedTrackPoints.isNotEmpty()
+                ) {
+                    val iconName = if (!playing.value || paused) "play" else "pause"
+                    Image(
+                        painter = painterResource("icons/$iconName.svg"),
+                        contentDescription = iconName.replaceFirstChar { it.uppercase() },
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = {
+                        playing.value = false
+                        paused = false
+                        stopPlayGpxFile(webEngine.value, position, playing, true)
+                    },
+                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                    enabled = playing.value
+                ) {
+                    Image(
+                        painter = painterResource("icons/stop.svg"),
+                        contentDescription = "Stop",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -312,7 +367,7 @@ fun sendJavaScriptCommand(webEngine: WebEngine?, command: String) {
     }
 }
 
-fun openFilePicker(webEngine: WebEngine?): String? {
+fun openFilePicker(webEngine: WebEngine?, positionSetter: (Float) -> Unit): String? {
     val fileChooser = JFileChooser().apply {
         fileFilter = FileNameExtensionFilter("GPX Files (*.gpx)", "gpx") // ✅ Filter for .gpx
         dialogTitle = "Select a GPX File"
@@ -325,11 +380,18 @@ fun openFilePicker(webEngine: WebEngine?): String? {
         fileChooser.selectedFile.absolutePath
     } else null
 
-    filePath?.let {
-        val trackPoints = parseGpxFile(it)
+    filePath?.let { path ->
+        val trackPoints = parseGpxFile(path)
         sendGpxToMap(webEngine, trackPoints)
         refinedTrackPoints = refineTrack(trackPoints)
+        currentIndex = 0
+
+        webEngine?.let { engine ->
+            markerToStart(engine)
+        }
+        positionSetter(0f)
     }
+
 
     return filePath
 }
@@ -432,43 +494,55 @@ fun calculateHeading(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Do
     return (Math.toDegrees(headingRad) + 360) % 360
 }
 
-fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int) {
-    if (refinedTrackPoints.isEmpty() || playing) return
+fun moveMarkerToCurrentIndex(webEngine: WebEngine, speedKmh: Int, interval: Long) {
+    val (lat1, lon1) = refinedTrackPoints[currentIndex]
+    val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
+    val currentSpeedKmh = speedKmh
 
-    playing = true
+    println("📍 Moving to: ($lat1, $lon1), Speed: $currentSpeedKmh km/h, Interval: $interval ms")
+
+    val heading = calculateHeading(lat1, lon1, lat2, lon2)
+    val jsCommand = """
+            marker.setLatLng([$lat1, $lon1]);
+            marker.setRotationAngle($heading);
+            marker.setOpacity(1);
+        """.trimIndent()
+    sendJavaScriptCommand(webEngine, jsCommand)
+}
+
+fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider: () -> Boolean, position: MutableState<Float>, playing: MutableState<Boolean>) {
+    if (refinedTrackPoints.isEmpty()) return
+
+    playing.value = true
     firstIntentSent = false
-    currentIndex = 0
 
     fun scheduleNextStep() {
-        if (!playing || currentIndex >= refinedTrackPoints.size - 1) {
-            playing = false
+        if (!playing.value || currentIndex >= refinedTrackPoints.size - 1) {
             println("✅ Playback finished.")
+            stopPlayGpxFile(webEngine, position, playing, false)
             return
         }
 
         val (lat1, lon1) = refinedTrackPoints[currentIndex]
         val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
         val distance = calculateDistance(lat1, lon1, lat2, lon2)
-        val currentSpeedKmh = speedProvider().coerceAtLeast(1) // avoid division by zero
-        val interval = ((distance / (currentSpeedKmh / 3.6)) * 1000).toLong()
+        val interval = ((distance / (speedProvider().coerceAtLeast(1) / 3.6)) * 1000).toLong()
 
-        println("📍 Moving to: ($lat1, $lon1), Speed: $currentSpeedKmh km/h, Interval: $interval ms")
-
-        val heading = calculateHeading(lat1, lon1, lat2, lon2)
-        val jsCommand = """
-            marker.setLatLng([$lat1, $lon1]);
-            marker.setRotationAngle($heading);
-            marker.setOpacity(1);
-        """.trimIndent()
-        sendJavaScriptCommand(webEngine, jsCommand)
+        webEngine?.let { engine ->
+            moveMarkerToCurrentIndex(engine, speedProvider().coerceAtLeast(1), interval) // avoid division by zero
+        }
 
         if (!firstIntentSent || System.currentTimeMillis() - lastIntentSentTime > 800) {
-            sendIntent(lat1, lon1, currentSpeedKmh)
+            sendIntent(lat1, lon1, speedProvider().coerceAtLeast(1))
             firstIntentSent = true
             lastIntentSentTime = System.currentTimeMillis()
         }
 
-        currentIndex++
+        if (!pausedProvider()) {
+            currentIndex++
+        }
+
+        position.value = ((currentIndex.toFloat() / (refinedTrackPoints.size - 1)) * 100f)
 
         // Schedule next step dynamically
         Timer().schedule(object : TimerTask() {
@@ -481,16 +555,18 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int) {
     scheduleNextStep()
 }
 
-fun stopPlayGpxFile(webEngine: WebEngine?) {
-    if (playing) {
-        println("⏹ Stopping playback.")
-        playbackTimer?.cancel()
-        playbackTimer = null
-        playing = false
-        firstIntentSent = false
+fun stopPlayGpxFile(webEngine: WebEngine?, position: MutableState<Float>, playing: MutableState<Boolean>, resetPosition: Boolean) {
+    println("⏹ Stopping playback.")
+    playbackTimer?.cancel()
+    playbackTimer = null
+    playing.value = false
+    firstIntentSent = false
+    if (resetPosition) {
+        currentIndex = 0
         webEngine?.let {
-           markerToStart(it)
+            markerToStart(it)
         }
+        position.value = 0f
     }
 }
 
@@ -517,7 +593,7 @@ fun main() = application {
         onCloseRequest = ::exitApplication,
         state = rememberWindowState(
             width = 800.dp,
-            height = 900.dp
+            height = 1000.dp
         )
     ) {
         App()
