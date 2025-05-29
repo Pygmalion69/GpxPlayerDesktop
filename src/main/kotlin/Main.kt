@@ -183,6 +183,12 @@ fun App() {
                 Button(
                     onClick = {
                         if (!playing.value) {
+                            if (currentIndex == refinedTrackPoints.size - 1) {
+                                currentIndex = 0
+                                webEngine.value?.let { engine ->
+                                    markerToStart(engine)
+                                }
+                            }
                             playing.value = true
                             paused = false
                             playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
