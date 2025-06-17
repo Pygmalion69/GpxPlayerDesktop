@@ -33,7 +33,7 @@ jobs:
         run: ./gradlew build
 
       - name: 📦 Package app
-        run: ./gradlew packageReleaseDistributionForCurrentOS
+        run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v4
