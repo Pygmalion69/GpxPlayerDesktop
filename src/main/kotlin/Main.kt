@@ -522,6 +522,9 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
     playing.value = true
     firstIntentSent = false
 
+    playbackTimer?.cancel()
+    playbackTimer = Timer("playback-timer", true)
+
     fun scheduleNextStep() {
         if (!playing.value || currentIndex >= refinedTrackPoints.size - 1) {
             println("✅ Playback finished.")
@@ -551,7 +554,7 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
         position.value = ((currentIndex.toFloat() / (refinedTrackPoints.size - 1)) * 100f)
 
         // Schedule next step dynamically
-        Timer().schedule(object : TimerTask() {
+        playbackTimer?.schedule(object : TimerTask() {
             override fun run() {
                 scheduleNextStep()
             }
@@ -564,6 +567,7 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
 fun stopPlayGpxFile(webEngine: WebEngine?, position: MutableState<Float>, playing: MutableState<Boolean>, resetPosition: Boolean) {
     println("⏹ Stopping playback.")
     playbackTimer?.cancel()
+    playbackTimer?.purge()
     playbackTimer = null
     playing.value = false
     firstIntentSent = false
