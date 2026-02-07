@@ -28,13 +28,52 @@
        });
     </script>
     <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+        #map-root {
+            position: relative;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #map-rotator {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            position: relative;
+        }
+        #map-rotator.square {
+            position: relative;
+            flex: 0 0 auto;
+        }
+        #map-transform {
+            height: 100%;
+            width: 100%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform-origin: 50% 50%;
+            will-change: transform;
+        }
         #map {
-            height: 420px;
+            height: 100%;
+            width: 100%;
         }
     </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map-root">
+    <div id="map-rotator">
+        <div id="map-transform">
+            <div id="map"></div>
+        </div>
+    </div>
+</div>
 
 <script>
     var map = L.map('map', { attributionControl: false }).setView([51.78962, 6.14120], 13);
@@ -63,7 +102,140 @@
         position: 'topright'
     }).addTo(map);
 
+    var mapRoot = document.getElementById('map-root');
+    var mapRotator = document.getElementById('map-rotator');
+    var mapTransform = document.getElementById('map-transform');
+    var currentRotationDeg = 0;
+    var isSquareMode = false;
+    var lastLat = null;
+    var lastLon = null;
+    var oversizeScale = 1.8;
+
+    function resizeSquareFrame() {
+        if (!mapRoot || !mapRotator) {
+            mapRoot = document.getElementById('map-root');
+            mapRotator = document.getElementById('map-rotator');
+        }
+        if (!mapRoot || !mapRotator) return;
+        if (!isSquareMode) {
+            mapRotator.style.width = '100%';
+            mapRotator.style.height = '100%';
+            return;
+        }
+        var size = Math.min(mapRoot.clientWidth, mapRoot.clientHeight);
+        mapRotator.style.width = size + 'px';
+        mapRotator.style.height = size + 'px';
+    }
+
+    function recenterIfKnown() {
+        if (lastLat !== null && lastLon !== null) {
+            map.setView([lastLat, lastLon], map.getZoom(), { animate: false });
+        }
+    }
+
+    function invalidateMapSize() {
+        if (typeof map !== "undefined") {
+            map.invalidateSize({ animate: false });
+            recenterIfKnown();
+        }
+    }
+
+    function applyMapRotation(angleDeg) {
+        if (!mapRotator) {
+            mapRotator = document.getElementById('map-rotator');
+        }
+        if (!mapTransform) {
+            mapTransform = document.getElementById('map-transform');
+        }
+        currentRotationDeg = angleDeg;
+        mapTransform.style.transform = 'translate(-50%, -50%) rotate(' + angleDeg + 'deg)';
+    }
+
+    function setSquareMode(enabled) {
+        isSquareMode = enabled;
+        if (!mapRotator) {
+            mapRotator = document.getElementById('map-rotator');
+        }
+        if (!mapRotator) return;
+        if (enabled) {
+            mapRotator.classList.add('square');
+        } else {
+            mapRotator.classList.remove('square');
+        }
+        resizeSquareFrame();
+        invalidateMapSize();
+        applyMapRotation(currentRotationDeg);
+    }
+
+    function updateMapOversize() {
+        if (!mapRoot || !mapTransform) {
+            mapRoot = document.getElementById('map-root');
+            mapTransform = document.getElementById('map-transform');
+        }
+        if (!mapRoot || !mapTransform) return;
+        if (!isSquareMode) {
+            mapTransform.style.width = '100%';
+            mapTransform.style.height = '100%';
+            return;
+        }
+        var baseSize = Math.max(mapRoot.clientWidth, mapRoot.clientHeight);
+        var size = Math.ceil(baseSize * oversizeScale);
+        mapTransform.style.width = size + 'px';
+        mapTransform.style.height = size + 'px';
+    }
+
+    window.addEventListener('resize', function () {
+        resizeSquareFrame();
+        updateMapOversize();
+        invalidateMapSize();
+        applyMapRotation(currentRotationDeg);
+    });
+
+    function updateVehicle(lat, lon, heading, headingUp, follow) {
+        marker.setLatLng([lat, lon]);
+        marker.setRotationAngle(heading);
+        marker.setOpacity(1);
+        lastLat = lat;
+        lastLon = lon;
+
+        if (follow) {
+            map.setView([lat, lon], map.getZoom(), { animate: false });
+        }
+
+        if (headingUp) {
+            setSquareMode(true);
+            updateMapOversize();
+            applyMapRotation(-heading);
+        } else {
+            setSquareMode(false);
+            updateMapOversize();
+            applyMapRotation(0);
+        }
+    }
+
     var polyline;
+
+    function zoomInMap() {
+        if (typeof map !== "undefined") {
+            map.zoomIn();
+        }
+    }
+
+    function zoomOutMap() {
+        if (typeof map !== "undefined") {
+            map.zoomOut();
+        }
+    }
+
+    function resetMapLayout() {
+        setSquareMode(false);
+        updateMapOversize();
+        applyMapRotation(0);
+        invalidateMapSize();
+    }
+
+    setTimeout(resetMapLayout, 0);
+    setTimeout(resetMapLayout, 150);
 
 
 </script>

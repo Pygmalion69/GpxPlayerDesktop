@@ -1,4 +1,5 @@
 import androidx.compose.desktop.ui.tooling.preview.Preview
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,19 +25,22 @@ import javafx.scene.web.WebEngine
 import javafx.scene.web.WebView
 import netscape.javascript.JSObject
 import org.w3c.dom.Document
+import java.awt.KeyboardFocusManager
 import java.io.File
 import java.util.*
 import java.util.prefs.Preferences
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 import javax.xml.parsers.DocumentBuilderFactory
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
-import androidx.compose.material.icons.Icons
 
-var playing = false
+const val DEFAULT_MAP_LAT = 51.78962
+const val DEFAULT_MAP_LON = 6.14120
+
 var firstIntentSent = false
 var lastIntentSentTime = 0L
 var currentIndex = 0
@@ -44,6 +48,14 @@ var refinedTrackPoints = listOf<Pair<Double, Double>>()
 var adbPath = "/usr/bin/adb"
 
 private var playbackTimer: Timer? = null
+
+private var currentVehicleLatLon: Pair<Double, Double>? = null
+private var currentVehicleHeadingDeg = 0.0
+
+enum class DriveMode {
+    GPX,
+    FREE_DRIVE
+}
 
 private val prefs = Preferences.userRoot().node("gpxplayer")
 
@@ -68,14 +80,89 @@ fun App() {
     var selectedFile by remember { mutableStateOf<String?>(null) }
     var playing = remember { mutableStateOf(false) }
     var paused by remember { mutableStateOf(false) }
+    var driveMode by remember { mutableStateOf(DriveMode.GPX) }
+    var freeDriveSpeed by remember { mutableStateOf(0.0) }
+    var freeDriveHeading by remember { mutableStateOf(0.0) }
 
     val webEngine = remember { mutableStateOf<WebEngine?>(null) }
+    val freeDriveController = remember { FreeDriveController { webEngine.value } }
+    val keyDispatcher = remember {
+        FreeDriveKeyDispatcher(
+            isEnabled = { driveMode == DriveMode.FREE_DRIVE },
+            onAccelerate = {
+                freeDriveController.accelerate()
+                freeDriveSpeed = freeDriveController.speedKmh
+            },
+            onDecelerate = {
+                freeDriveController.decelerate()
+                freeDriveSpeed = freeDriveController.speedKmh
+            },
+            onTurnLeft = {
+                freeDriveController.turnLeft()
+                freeDriveHeading = freeDriveController.headingDeg
+            },
+            onTurnRight = {
+                freeDriveController.turnRight()
+                freeDriveHeading = freeDriveController.headingDeg
+            }
+        )
+    }
 
     adbPath = getSavedAdbPath() ?: "/usr/bin/adb"
     startAndroidApp()
 
+    fun enterFreeDrive() {
+        if (driveMode == DriveMode.FREE_DRIVE) return
+        if (playing.value) {
+            playing.value = false
+            paused = false
+            stopPlayGpxFile(webEngine.value, position, playing, false)
+        }
+        driveMode = DriveMode.FREE_DRIVE
+        val initialPosition = currentVehicleLatLon
+            ?: refinedTrackPoints.firstOrNull()
+            ?: Pair(DEFAULT_MAP_LAT, DEFAULT_MAP_LON)
+        val initialHeading = currentVehicleHeadingDeg
+        freeDriveController.start(initialPosition, initialHeading)
+        freeDriveSpeed = freeDriveController.speedKmh
+        freeDriveHeading = freeDriveController.headingDeg
+        logMessages = logMessages + "Free drive enabled."
+    }
+
+    fun enterGpxMode() {
+        if (driveMode == DriveMode.GPX) return
+        driveMode = DriveMode.GPX
+        freeDriveController.stop()
+        logMessages = logMessages + "Free drive disabled."
+        resetMapFrame(webEngine.value)
+        if (refinedTrackPoints.isNotEmpty()) {
+            moveMarkerToIndex(webEngine.value, currentIndex, headingUp = false, follow = false)
+            if (refinedTrackPoints.size > 1) {
+                position.value = ((currentIndex.toFloat() / (refinedTrackPoints.size - 1)) * 100f)
+            } else {
+                position.value = 0f
+            }
+        } else {
+            currentVehicleLatLon?.let { (lat, lon) ->
+                updateVehicleOnMap(webEngine.value, lat, lon, currentVehicleHeadingDeg, headingUp = false, follow = false)
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val manager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
+        manager.addKeyEventDispatcher(keyDispatcher)
+        onDispose {
+            manager.removeKeyEventDispatcher(keyDispatcher)
+        }
+    }
+
     MaterialTheme(colors = AppColorPalette) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -87,7 +174,7 @@ fun App() {
                     logMessages = logMessages + "Selected file: ${selectedFile ?: "None"}"
 
                 }, colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                    enabled = !playing.value) {
+                    enabled = driveMode == DriveMode.GPX && !playing.value) {
                     Text("Load GPX")
                 }
 
@@ -135,98 +222,148 @@ fun App() {
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-
-            Text("Speed: ${speed.toInt()} km/h")
-            Slider(
-                value = speed,
-                onValueChange = { speed = it },
-                valueRange = 0f..130f,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text("Position: ${position.value.toInt()} %")
-            Slider(
-                value = position.value,
-                onValueChange = {
-                    position.value = it
-
-                    if (refinedTrackPoints.isNotEmpty()) {
-                        val index = (position.value / 100f * (refinedTrackPoints.lastIndex)).toInt()
-                            .coerceIn(0, refinedTrackPoints.lastIndex)
-                        currentIndex = index
-
-                        val (lat1, lon1) = refinedTrackPoints[index]
-                        val (lat2, lon2) = refinedTrackPoints.getOrNull(index + 1) ?: refinedTrackPoints[index]
-
-                        val heading = calculateHeading(lat1, lon1, lat2, lon2)
-
-                        val js = """
-                marker.setLatLng([$lat1, $lon1]);
-                marker.setRotationAngle($heading);
-                marker.setOpacity(1);
-            """.trimIndent()
-                        sendJavaScriptCommand(webEngine.value, js)
-
-                        sendIntent(lat1, lon1, speed.toInt())
-                    }
-                },
-                valueRange = 0f..100f,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !refinedTrackPoints.isEmpty()
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Row {
-                Button(
-                    onClick = {
-                        if (!playing.value) {
-                            if (currentIndex == refinedTrackPoints.size - 1) {
-                                currentIndex = 0
-                                webEngine.value?.let { engine ->
-                                    markerToStart(engine)
-                                }
-                            }
-                            playing.value = true
-                            paused = false
-                            playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
-                        } else {
-                            paused = !paused
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                    enabled = refinedTrackPoints.isNotEmpty()
-                ) {
-                    val iconName = if (!playing.value || paused) "play" else "pause"
-                    Image(
-                        painter = painterResource("icons/$iconName.svg"),
-                        contentDescription = iconName.replaceFirstChar { it.uppercase() },
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = {
-                        playing.value = false
-                        paused = false
-                        stopPlayGpxFile(webEngine.value, position, playing, true)
-                    },
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                    enabled = playing.value
-                ) {
-                    Image(
-                        painter = painterResource("icons/stop.svg"),
-                        contentDescription = "Stop",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Mode:")
+                ModeToggleButton(
+                    label = "GPX",
+                    selected = driveMode == DriveMode.GPX,
+                    onClick = { enterGpxMode() }
+                )
+                ModeToggleButton(
+                    label = "Free Drive",
+                    selected = driveMode == DriveMode.FREE_DRIVE,
+                    onClick = { enterFreeDrive() }
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (driveMode == DriveMode.GPX) {
+                Text("Speed: ${speed.toInt()} km/h")
+                Slider(
+                    value = speed,
+                    onValueChange = { speed = it },
+                    valueRange = 0f..130f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("Position: ${position.value.toInt()} %")
+                Slider(
+                    value = position.value,
+                    onValueChange = {
+                        position.value = it
+
+                        if (refinedTrackPoints.isNotEmpty()) {
+                            val index = (position.value / 100f * (refinedTrackPoints.lastIndex)).toInt()
+                                .coerceIn(0, refinedTrackPoints.lastIndex)
+                            currentIndex = index
+
+                            val (lat1, lon1) = refinedTrackPoints[index]
+                            val heading = headingForIndex(index)
+                            updateVehicleState(lat1, lon1, heading)
+                            updateVehicleOnMap(webEngine.value, lat1, lon1, heading, headingUp = false, follow = false)
+
+                            sendIntent(lat1, lon1, speed.toInt())
+                        }
+                    },
+                    valueRange = 0f..100f,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = refinedTrackPoints.isNotEmpty()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row {
+                    Button(
+                        onClick = {
+                            if (!playing.value) {
+                                if (currentIndex == refinedTrackPoints.size - 1) {
+                                    currentIndex = 0
+                                    moveMarkerToIndex(webEngine.value, currentIndex, headingUp = false, follow = false)
+                                }
+                                playing.value = true
+                                paused = false
+                                playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
+                            } else {
+                                paused = !paused
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                        enabled = refinedTrackPoints.isNotEmpty()
+                    ) {
+                        val iconName = if (!playing.value || paused) "play" else "pause"
+                        Image(
+                            painter = painterResource("icons/$iconName.svg"),
+                            contentDescription = iconName.replaceFirstChar { it.uppercase() },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            playing.value = false
+                            paused = false
+                            stopPlayGpxFile(webEngine.value, position, playing, true)
+                        },
+                        colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                        enabled = playing.value
+                    ) {
+                        Image(
+                            painter = painterResource("icons/stop.svg"),
+                            contentDescription = "Stop",
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            } else {
+                val speedLabel = if (freeDriveSpeed < 0) {
+                    "-${abs(freeDriveSpeed).toInt()}"
+                } else {
+                    freeDriveSpeed.toInt().toString()
+                }
+                Text("Free drive (heading-up)")
+                Text("Speed: $speedLabel km/h")
+                Text("Heading: ${freeDriveHeading.toInt()}°")
+                Text("Controls: ↑/↓ accelerate/decelerate, ←/→ steer")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (driveMode == DriveMode.FREE_DRIVE) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Zoom:")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { zoomMap(webEngine.value, zoomIn = false) },
+                        colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                        enabled = webEngine.value != null
+                    ) {
+                        Text("−")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { zoomMap(webEngine.value, zoomIn = true) },
+                        colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                        enabled = webEngine.value != null
+                    ) {
+                        Text("+")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             Box(
                 modifier = Modifier
@@ -261,7 +398,7 @@ fun App() {
 }
 
 @Composable
-fun MapView(webEngineState: MutableState<WebEngine?>) {
+fun MapView(webEngineState: MutableState<WebEngine?>, modifier: Modifier = Modifier.fillMaxSize()) {
     val mapHtmlPath = "file://${File("assets/map.html").absolutePath}"
     // ✅ Ensure panelState is always initialized
     val panelState = remember { mutableStateOf<JFXPanel?>(null) }
@@ -276,7 +413,7 @@ fun MapView(webEngineState: MutableState<WebEngine?>) {
     if (panelState.value != null) {
         SwingPanel(
             factory = { panelState.value!! },
-            modifier = Modifier.fillMaxSize()
+            modifier = modifier
         )
     }
 }
@@ -307,6 +444,13 @@ fun createWebViewPanel(url: String, webEngineState: MutableState<WebEngine?>): J
             var style = document.createElement('style');
             style.innerHTML = 'body::-webkit-scrollbar { display: none; } body { overflow: hidden; }';
             document.head.appendChild(style);
+            """.trimIndent()
+                )
+                webEngine.executeScript(
+                    """
+            if (typeof resetMapLayout === "function") {
+                resetMapLayout();
+            }
             """.trimIndent()
                 )
             }
@@ -363,7 +507,6 @@ fun sendGpxToMap(webEngine: WebEngine?, trackPoints: List<Pair<Double, Double>>)
 
     Platform.runLater {
         webEngine?.executeScript(jsCommand)
-        webEngine?.let{markerToStart(it)}
     }
 }
 
@@ -371,6 +514,91 @@ fun sendJavaScriptCommand(webEngine: WebEngine?, command: String) {
     Platform.runLater {
         webEngine?.executeScript(command)
     }
+}
+
+fun zoomMap(webEngine: WebEngine?, zoomIn: Boolean) {
+    val jsCommand = if (zoomIn) "zoomInMap();" else "zoomOutMap();"
+    sendJavaScriptCommand(webEngine, jsCommand)
+}
+
+fun resetMapFrame(webEngine: WebEngine?) {
+    val jsCommand = """
+        if (typeof setSquareMode === "function") {
+            setSquareMode(false);
+            if (typeof updateMapOversize === "function") { updateMapOversize(); }
+            if (typeof applyMapRotation === "function") { applyMapRotation(0); }
+        }
+    """.trimIndent()
+    sendJavaScriptCommand(webEngine, jsCommand)
+}
+
+@Composable
+fun ModeToggleButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    if (selected) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = AppColorPalette.primary,
+                contentColor = AppColorPalette.onPrimary
+            )
+        ) {
+            Text(label)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColorPalette.primary),
+            border = BorderStroke(1.dp, AppColorPalette.primary)
+        ) {
+            Text(label)
+        }
+    }
+}
+
+fun updateVehicleState(lat: Double, lon: Double, headingDeg: Double) {
+    currentVehicleLatLon = Pair(lat, lon)
+    currentVehicleHeadingDeg = headingDeg
+}
+
+fun updateVehicleOnMap(
+    webEngine: WebEngine?,
+    lat: Double,
+    lon: Double,
+    headingDeg: Double,
+    headingUp: Boolean,
+    follow: Boolean
+) {
+    val jsCommand = """
+        updateVehicle($lat, $lon, $headingDeg, ${headingUp.toString()}, ${follow.toString()});
+    """.trimIndent()
+    sendJavaScriptCommand(webEngine, jsCommand)
+}
+
+fun headingForIndex(index: Int): Double {
+    if (refinedTrackPoints.isEmpty()) return 0.0
+    val safeIndex = index.coerceIn(0, refinedTrackPoints.lastIndex)
+    return when {
+        safeIndex < refinedTrackPoints.lastIndex -> {
+            val (lat1, lon1) = refinedTrackPoints[safeIndex]
+            val (lat2, lon2) = refinedTrackPoints[safeIndex + 1]
+            calculateHeading(lat1, lon1, lat2, lon2)
+        }
+        safeIndex > 0 -> {
+            val (lat1, lon1) = refinedTrackPoints[safeIndex - 1]
+            val (lat2, lon2) = refinedTrackPoints[safeIndex]
+            calculateHeading(lat1, lon1, lat2, lon2)
+        }
+        else -> 0.0
+    }
+}
+
+fun moveMarkerToIndex(webEngine: WebEngine?, index: Int, headingUp: Boolean, follow: Boolean) {
+    if (refinedTrackPoints.isEmpty()) return
+    val safeIndex = index.coerceIn(0, refinedTrackPoints.lastIndex)
+    val (lat, lon) = refinedTrackPoints[safeIndex]
+    val heading = headingForIndex(safeIndex)
+    updateVehicleState(lat, lon, heading)
+    updateVehicleOnMap(webEngine, lat, lon, heading, headingUp, follow)
 }
 
 fun openFilePicker(webEngine: WebEngine?, positionSetter: (Float) -> Unit): String? {
@@ -392,9 +620,7 @@ fun openFilePicker(webEngine: WebEngine?, positionSetter: (Float) -> Unit): Stri
         refinedTrackPoints = refineTrack(trackPoints)
         currentIndex = 0
 
-        webEngine?.let { engine ->
-            markerToStart(engine)
-        }
+        moveMarkerToIndex(webEngine, currentIndex, headingUp = false, follow = false)
         positionSetter(0f)
     }
 
@@ -502,18 +728,13 @@ fun calculateHeading(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Do
 
 fun moveMarkerToCurrentIndex(webEngine: WebEngine, speedKmh: Int, interval: Long) {
     val (lat1, lon1) = refinedTrackPoints[currentIndex]
-    val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
     val currentSpeedKmh = speedKmh
+    val heading = headingForIndex(currentIndex)
 
     println("📍 Moving to: ($lat1, $lon1), Speed: $currentSpeedKmh km/h, Interval: $interval ms")
 
-    val heading = calculateHeading(lat1, lon1, lat2, lon2)
-    val jsCommand = """
-            marker.setLatLng([$lat1, $lon1]);
-            marker.setRotationAngle($heading);
-            marker.setOpacity(1);
-        """.trimIndent()
-    sendJavaScriptCommand(webEngine, jsCommand)
+    updateVehicleState(lat1, lon1, heading)
+    updateVehicleOnMap(webEngine, lat1, lon1, heading, headingUp = false, follow = false)
 }
 
 fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider: () -> Boolean, position: MutableState<Float>, playing: MutableState<Boolean>) {
@@ -581,19 +802,7 @@ fun stopPlayGpxFile(webEngine: WebEngine?, position: MutableState<Float>, playin
 }
 
 private fun markerToStart(webEngine: WebEngine) {
-    val (lat1, lon1) = refinedTrackPoints.firstOrNull() ?: return
-    val heading = if (refinedTrackPoints.size >= 2) {
-        val (lat2, lon2) = refinedTrackPoints[1]
-        calculateHeading(lat1, lon1, lat2, lon2)
-    } else 0.0
-
-    val js = """
-        marker.setLatLng([$lat1, $lon1]);
-        marker.setRotationAngle($heading);
-        marker.setOpacity(1);
-    """.trimIndent()
-
-    sendJavaScriptCommand(webEngine, js)
+    moveMarkerToIndex(webEngine, 0, headingUp = false, follow = false)
 }
 
 fun main() = application {
