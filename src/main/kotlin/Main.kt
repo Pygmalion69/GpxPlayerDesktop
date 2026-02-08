@@ -27,8 +27,15 @@ import netscape.javascript.JSObject
 import org.w3c.dom.Document
 import java.awt.KeyboardFocusManager
 import java.io.File
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
 import java.util.*
 import java.util.prefs.Preferences
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 import javax.xml.parsers.DocumentBuilderFactory
@@ -40,6 +47,7 @@ import kotlin.math.sqrt
 
 const val DEFAULT_MAP_LAT = 51.78962
 const val DEFAULT_MAP_LON = 6.14120
+const val IP_GEOLOCATION_URL = "https://ipapi.co/json/"
 
 var firstIntentSent = false
 var lastIntentSentTime = 0L
@@ -51,6 +59,9 @@ private var playbackTimer: Timer? = null
 
 private var currentVehicleLatLon: Pair<Double, Double>? = null
 private var currentVehicleHeadingDeg = 0.0
+
+private val initialMapCenterRequested = AtomicBoolean(false)
+private val approximateUserLocation = AtomicReference<Pair<Double, Double>?>(null)
 
 enum class DriveMode {
     GPX,
@@ -83,12 +94,13 @@ fun App() {
     var driveMode by remember { mutableStateOf(DriveMode.GPX) }
     var freeDriveSpeed by remember { mutableStateOf(0.0) }
     var freeDriveHeading by remember { mutableStateOf(0.0) }
+    var freeDrivePositionSet by remember { mutableStateOf(false) }
 
     val webEngine = remember { mutableStateOf<WebEngine?>(null) }
     val freeDriveController = remember { FreeDriveController { webEngine.value } }
     val keyDispatcher = remember {
         FreeDriveKeyDispatcher(
-            isEnabled = { driveMode == DriveMode.FREE_DRIVE },
+            isEnabled = { driveMode == DriveMode.FREE_DRIVE && freeDriveController.isActive },
             onAccelerate = {
                 freeDriveController.accelerate()
                 freeDriveSpeed = freeDriveController.speedKmh
@@ -119,21 +131,23 @@ fun App() {
             stopPlayGpxFile(webEngine.value, position, playing, false)
         }
         driveMode = DriveMode.FREE_DRIVE
-        val initialPosition = currentVehicleLatLon
-            ?: refinedTrackPoints.firstOrNull()
-            ?: Pair(DEFAULT_MAP_LAT, DEFAULT_MAP_LON)
-        val initialHeading = currentVehicleHeadingDeg
-        freeDriveController.start(initialPosition, initialHeading)
-        freeDriveSpeed = freeDriveController.speedKmh
-        freeDriveHeading = freeDriveController.headingDeg
-        logMessages = logMessages + "Free drive enabled."
+        freeDriveController.stop()
+        freeDriveSpeed = 0.0
+        freeDriveHeading = 0.0
+        freeDrivePositionSet = false
+        resetMapFrame(webEngine.value)
+        hideVehicleOnMap(webEngine.value)
+        showCenterCross(webEngine.value)
+        logMessages = logMessages + "Free drive enabled. Set position to start."
     }
 
     fun enterGpxMode() {
         if (driveMode == DriveMode.GPX) return
         driveMode = DriveMode.GPX
         freeDriveController.stop()
+        freeDrivePositionSet = false
         logMessages = logMessages + "Free drive disabled."
+        hideCenterCross(webEngine.value)
         resetMapFrame(webEngine.value)
         if (refinedTrackPoints.isNotEmpty()) {
             moveMarkerToIndex(webEngine.value, currentIndex, headingUp = false, follow = false)
@@ -147,6 +161,36 @@ fun App() {
                 updateVehicleOnMap(webEngine.value, lat, lon, currentVehicleHeadingDeg, headingUp = false, follow = false)
             }
         }
+    }
+
+    fun setFreeDrivePositionFromCenter() {
+        val engine = webEngine.value ?: return
+        Platform.runLater {
+            val lat = (engine.executeScript("getMapCenterLat()") as? Number)?.toDouble()
+            val lon = (engine.executeScript("getMapCenterLon()") as? Number)?.toDouble()
+            if (lat == null || lon == null) return@runLater
+            val initialHeading = currentVehicleHeadingDeg
+            freeDriveController.start(Pair(lat, lon), initialHeading)
+            freeDriveSpeed = freeDriveController.speedKmh
+            freeDriveHeading = freeDriveController.headingDeg
+            freeDrivePositionSet = true
+            hideCenterCross(engine)
+            updateVehicleState(lat, lon, freeDriveHeading)
+            updateVehicleOnMap(engine, lat, lon, freeDriveHeading, headingUp = true, follow = true)
+            logMessages = logMessages + "Free drive position set."
+        }
+    }
+
+    fun clearFreeDrivePosition() {
+        freeDriveController.stop()
+        freeDriveSpeed = 0.0
+        freeDriveHeading = 0.0
+        freeDrivePositionSet = false
+        clearVehicleState()
+        hideVehicleOnMap(webEngine.value)
+        showCenterCross(webEngine.value)
+        resetMapFrame(webEngine.value)
+        logMessages = logMessages + "Free drive position cleared."
     }
 
     DisposableEffect(Unit) {
@@ -330,9 +374,13 @@ fun App() {
                     freeDriveSpeed.toInt().toString()
                 }
                 Text("Free drive (heading-up)")
-                Text("Speed: $speedLabel km/h")
-                Text("Heading: ${freeDriveHeading.toInt()}°")
-                Text("Controls: ↑/↓ accelerate/decelerate, ←/→ steer")
+                if (freeDrivePositionSet) {
+                    Text("Speed: $speedLabel km/h")
+                    Text("Heading: ${freeDriveHeading.toInt()}°")
+                    Text("Controls: ↑/↓ accelerate/decelerate, ←/→ steer")
+                } else {
+                    Text("Set position to enable controls.")
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -340,29 +388,54 @@ fun App() {
             if (driveMode == DriveMode.FREE_DRIVE) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Zoom:")
-                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
-                        onClick = { zoomMap(webEngine.value, zoomIn = false) },
+                        onClick = { setFreeDrivePositionFromCenter() },
                         colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                        enabled = webEngine.value != null
+                        enabled = !freeDrivePositionSet && webEngine.value != null
                     ) {
-                        Text("−")
+                        Text("Set Position")
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
-                        onClick = { zoomMap(webEngine.value, zoomIn = true) },
+                        onClick = { clearFreeDrivePosition() },
                         colors = ButtonDefaults.buttonColors(contentColor = Color.White),
-                        enabled = webEngine.value != null
+                        enabled = freeDrivePositionSet
                     ) {
-                        Text("+")
+                        Text("Clear position")
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                if (freeDrivePositionSet) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Zoom:")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { zoomMap(webEngine.value, zoomIn = false) },
+                            colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                            enabled = webEngine.value != null
+                        ) {
+                            Text("−")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { zoomMap(webEngine.value, zoomIn = true) },
+                            colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                            enabled = webEngine.value != null
+                        ) {
+                            Text("+")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
 
             Box(
@@ -516,6 +589,62 @@ fun sendJavaScriptCommand(webEngine: WebEngine?, command: String) {
     }
 }
 
+fun maybeCenterMapToApproximateLocation(webEngine: WebEngine) {
+    if (!initialMapCenterRequested.compareAndSet(false, true)) return
+
+    Thread({
+        val location = fetchApproximateLocationCached()
+        Platform.runLater {
+            if (refinedTrackPoints.isNotEmpty() || currentVehicleLatLon != null) return@runLater
+            val (lat, lon) = location ?: Pair(DEFAULT_MAP_LAT, DEFAULT_MAP_LON)
+            val jsCommand = """
+                if (typeof map !== "undefined") {
+                    lastLat = $lat;
+                    lastLon = $lon;
+                    map.setView([$lat, $lon], map.getZoom(), { animate: false });
+                }
+            """.trimIndent()
+            webEngine.executeScript(jsCommand)
+        }
+    }, "ip-geolocation").apply { isDaemon = true }.start()
+}
+
+fun fetchApproximateLocation(): Pair<Double, Double>? {
+    return try {
+        val client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build()
+        val request = HttpRequest.newBuilder(URI.create(IP_GEOLOCATION_URL))
+            .timeout(Duration.ofSeconds(3))
+            .GET()
+            .build()
+        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() !in 200..299) return null
+        parseLatLon(response.body())
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun fetchApproximateLocationCached(): Pair<Double, Double>? {
+    val cached = approximateUserLocation.get()
+    if (cached != null) return cached
+    val fetched = fetchApproximateLocation()
+    if (fetched != null) {
+        approximateUserLocation.compareAndSet(null, fetched)
+    }
+    return fetched ?: approximateUserLocation.get()
+}
+
+fun parseLatLon(json: String): Pair<Double, Double>? {
+    val latMatch = Regex("\"latitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)").find(json)
+    val lonMatch = Regex("\"longitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)").find(json)
+    if (latMatch == null || lonMatch == null) return null
+    val lat = latMatch.groupValues[1].toDoubleOrNull() ?: return null
+    val lon = lonMatch.groupValues[1].toDoubleOrNull() ?: return null
+    return Pair(lat, lon)
+}
+
 fun zoomMap(webEngine: WebEngine?, zoomIn: Boolean) {
     val jsCommand = if (zoomIn) "zoomInMap();" else "zoomOutMap();"
     sendJavaScriptCommand(webEngine, jsCommand)
@@ -560,6 +689,11 @@ fun updateVehicleState(lat: Double, lon: Double, headingDeg: Double) {
     currentVehicleHeadingDeg = headingDeg
 }
 
+fun clearVehicleState() {
+    currentVehicleLatLon = null
+    currentVehicleHeadingDeg = 0.0
+}
+
 fun updateVehicleOnMap(
     webEngine: WebEngine?,
     lat: Double,
@@ -572,6 +706,18 @@ fun updateVehicleOnMap(
         updateVehicle($lat, $lon, $headingDeg, ${headingUp.toString()}, ${follow.toString()});
     """.trimIndent()
     sendJavaScriptCommand(webEngine, jsCommand)
+}
+
+fun hideVehicleOnMap(webEngine: WebEngine?) {
+    sendJavaScriptCommand(webEngine, "hideVehicle();")
+}
+
+fun showCenterCross(webEngine: WebEngine?) {
+    sendJavaScriptCommand(webEngine, "showCenterCross();")
+}
+
+fun hideCenterCross(webEngine: WebEngine?) {
+    sendJavaScriptCommand(webEngine, "hideCenterCross();")
 }
 
 fun headingForIndex(index: Int): Double {
@@ -824,6 +970,7 @@ class JavaScriptBridge(private val webEngine: WebEngine) {
     fun postMessage(message: String) {
         if (message == "Leaflet Ready") {
             println("✅ Leaflet is now fully loaded!")
+            maybeCenterMapToApproximateLocation(webEngine)
 
             // Now we can safely execute JavaScript commands
 //            Platform.runLater {

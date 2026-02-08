@@ -64,6 +64,38 @@
             height: 100%;
             width: 100%;
         }
+        #center-cross {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 14px;
+            height: 14px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+        }
+        #center-cross::before,
+        #center-cross::after {
+            content: '';
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            box-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+        }
+        #center-cross::before {
+            top: 0;
+            left: 50%;
+            width: 2px;
+            height: 100%;
+            transform: translateX(-50%);
+        }
+        #center-cross::after {
+            left: 0;
+            top: 50%;
+            width: 100%;
+            height: 2px;
+            transform: translateY(-50%);
+        }
     </style>
 </head>
 <body>
@@ -73,6 +105,7 @@
             <div id="map"></div>
         </div>
     </div>
+    <div id="center-cross"></div>
 </div>
 
 <script>
@@ -105,6 +138,7 @@
     var mapRoot = document.getElementById('map-root');
     var mapRotator = document.getElementById('map-rotator');
     var mapTransform = document.getElementById('map-transform');
+    var centerCross = document.getElementById('center-cross');
     var currentRotationDeg = 0;
     var isSquareMode = false;
     var lastLat = null;
@@ -211,6 +245,38 @@
             updateMapOversize();
             applyMapRotation(0);
         }
+    }
+
+    function hideVehicle() {
+        marker.setOpacity(0);
+    }
+
+    function showCenterCross() {
+        if (!centerCross) {
+            centerCross = document.getElementById('center-cross');
+        }
+        if (centerCross) {
+            centerCross.style.display = 'block';
+        }
+    }
+
+    function hideCenterCross() {
+        if (!centerCross) {
+            centerCross = document.getElementById('center-cross');
+        }
+        if (centerCross) {
+            centerCross.style.display = 'none';
+        }
+    }
+
+    function getMapCenterLat() {
+        if (typeof map === "undefined") return null;
+        return map.getCenter().lat;
+    }
+
+    function getMapCenterLon() {
+        if (typeof map === "undefined") return null;
+        return map.getCenter().lng;
     }
 
     var polyline;
