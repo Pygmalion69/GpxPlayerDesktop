@@ -3,7 +3,8 @@ name: Release GpxPlayerDesktop
 on:
   push:
     tags:
-      - 'v*' # Only trigger on tags starting with 'v'
+      - 'v*' # Tags starting with 'v'
+      - '[0-9]*' # Version tags without a leading 'v'
 
 jobs:
   release:
