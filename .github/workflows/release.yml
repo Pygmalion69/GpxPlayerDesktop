@@ -6,6 +6,9 @@ on:
       - 'v*' # Tags starting with 'v'
       - '[0-9]*' # Version tags without a leading 'v'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     name: Release on ${{ matrix.os }}
@@ -43,5 +46,6 @@ jobs:
           name: GpxPlayerDesktop ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           files: build/compose/binaries/**/*
+          token: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
