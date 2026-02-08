@@ -9,7 +9,8 @@ plugins {
 }
 
 group = "org.nitri"
-version = "1.0-SNAPSHOT"
+val appVersion = "1.0.0"
+version = appVersion
 
 repositories {
     mavenCentral()
@@ -64,7 +65,7 @@ compose.desktop {
                 TargetFormat.Exe,
                 TargetFormat.Deb)
             packageName = "GpxPlayer"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion
             linux {
                 iconFile.set(project.file("assets/GpxPlayer.ico"))
             }
