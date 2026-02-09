@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "org.nitri"
-val appVersion = "1.0.1"
+val appVersion = "1.0.2"
 version = appVersion
 
 repositories {
@@ -47,8 +47,6 @@ dependencies {
     implementation("org.openjfx:javafx-controls:$javafxVersion")
     implementation("org.openjfx:javafx-swing:$javafxVersion")
     implementation("org.openjfx:javafx-web:$javafxVersion")
-
-    //implementation("org.openjfx:javafx-swing:17.0.2")
 
     // JCEF (JetBrains Chromium Embedded Framework)
     implementation("org.jetbrains.skiko:skiko-awt-runtime-windows-x64:0.7.55") // For Windows
