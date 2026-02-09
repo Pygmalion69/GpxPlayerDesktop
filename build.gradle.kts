@@ -42,7 +42,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
 
     // JavaFX Modules
-    val javafxVersion = "21"
+    val javafxVersion = "17.0.2"
 
     implementation("org.openjfx:javafx-controls:$javafxVersion")
     implementation("org.openjfx:javafx-swing:$javafxVersion")
