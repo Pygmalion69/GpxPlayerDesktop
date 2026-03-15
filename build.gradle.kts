@@ -59,7 +59,10 @@ compose.desktop {
     application {
         mainClass = "MainKt"
         nativeDistributions {
-            modules("java.desktop")
+            modules(
+                "java.desktop",
+                "jdk.unsupported.desktop"
+            )
             targetFormats(
                 TargetFormat.Exe,
                 TargetFormat.Deb)
