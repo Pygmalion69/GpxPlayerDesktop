@@ -60,6 +60,12 @@ compose.desktop {
         mainClass = "MainKt"
         nativeDistributions {
             modules(
+                "javafx.base",
+                "javafx.graphics",
+                "javafx.controls",
+                "javafx.swing",
+                "javafx.web",
+                "jdk.jsobject",
                 "java.desktop",
                 "jdk.unsupported.desktop"
             )
