@@ -61,6 +61,7 @@ compose.desktop {
         nativeDistributions {
             modules(
                 "java.desktop",
+                "java.net.http",
                 "jdk.unsupported.desktop"
             )
             targetFormats(
