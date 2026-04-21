@@ -14,7 +14,6 @@ version = appVersion
 
 repositories {
     mavenCentral()
-    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     google()
 }
 
@@ -49,12 +48,6 @@ dependencies {
     implementation("org.openjfx:javafx-web:$javafxVersion")
 
     //implementation("org.openjfx:javafx-swing:17.0.2")
-
-    // JCEF (JetBrains Chromium Embedded Framework)
-    implementation("org.jetbrains.skiko:skiko-awt-runtime-windows-x64:0.7.55") // For Windows
-    implementation("org.jetbrains.skiko:skiko-awt-runtime-linux-x64:0.7.55")  // For Linux
-    implementation("org.jetbrains.skiko:skiko-awt-runtime-macos-x64:0.7.55")  // For macOS
-
 }
 
 compose.desktop {
