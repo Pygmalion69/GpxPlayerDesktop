@@ -9,7 +9,8 @@ plugins {
 }
 
 group = "org.nitri"
-val appVersion = "1.0.2"
+val appVersion = "1.0.4"
+val javafxVersion = "21.0.2"
 version = appVersion
 
 repositories {
@@ -19,13 +20,13 @@ repositories {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
 javafx {
-    version = "17.0.2"
-    modules = listOf("javafx.web", "javafx.swing") // This includes javafx.controls and javafx.graphics automatically
+    version = javafxVersion
+    modules = listOf("javafx.web", "javafx.swing")
 }
 
 dependencies {
@@ -39,13 +40,6 @@ dependencies {
     implementation("org.jetbrains.compose.ui:ui-desktop:1.4.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
-
-    // JavaFX Modules
-    val javafxVersion = "17.0.2"
-
-    implementation("org.openjfx:javafx-controls:$javafxVersion")
-    implementation("org.openjfx:javafx-swing:$javafxVersion")
-    implementation("org.openjfx:javafx-web:$javafxVersion")
 
 }
 
