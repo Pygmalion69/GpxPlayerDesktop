@@ -20,7 +20,16 @@ repositories {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        // Compose 1.6.10 packages with ProGuard 7.2.2; keep bytecode compatible with JDK 17 in CI.
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -35,9 +44,6 @@ dependencies {
     // (in a separate module for demo project and in testMain).
     // With compose.desktop.common you will also lose @Preview functionality
     implementation(compose.desktop.currentOs)
-
-    // JetBrains Compose for Swing UI components
-    implementation("org.jetbrains.compose.ui:ui-desktop:1.4.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
 
