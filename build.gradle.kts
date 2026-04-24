@@ -46,9 +46,6 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "MainKt"
-        buildTypes.release.proguard {
-            version.set("7.5.0")
-        }
         nativeDistributions {
             modules(
                 "java.desktop",

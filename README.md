@@ -21,7 +21,7 @@ GpxPlayerDesktop is a modern desktop application built with Kotlin and Jetpack C
 
 ### Prerequisites
 
-- Java 17+
+- Java 21+
 - Android device with developer options enabled
 - `adb` (Android Debug Bridge) installed
 
