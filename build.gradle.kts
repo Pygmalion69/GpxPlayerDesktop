@@ -45,9 +45,6 @@ dependencies {
     // With compose.desktop.common you will also lose @Preview functionality
     implementation(compose.desktop.currentOs)
 
-    // JetBrains Compose for Swing UI components
-    implementation("org.jetbrains.compose.ui:ui-desktop:1.4.0")
-
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
 
 }
