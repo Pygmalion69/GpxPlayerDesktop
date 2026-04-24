@@ -21,6 +21,7 @@ import javafx.application.Platform
 import javafx.embed.swing.JFXPanel
 import javafx.event.EventHandler
 import javafx.scene.Scene
+import javafx.concurrent.Worker
 import javafx.scene.web.WebEngine
 import javafx.scene.web.WebView
 import netscape.javascript.JSObject
@@ -472,13 +473,20 @@ fun App() {
 
 @Composable
 fun MapView(webEngineState: MutableState<WebEngine?>, modifier: Modifier = Modifier.fillMaxSize()) {
-    val mapHtmlPath = "file://${File("assets/map.html").absolutePath}"
-    // ✅ Ensure panelState is always initialized
+    val mapResourceUrl = remember {
+        Thread.currentThread().contextClassLoader.getResource("map/map.html")
+            ?: object {}.javaClass.classLoader.getResource("map/map.html")
+    }
     val panelState = remember { mutableStateOf<JFXPanel?>(null) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(mapResourceUrl) {
         Platform.runLater {
-            val panel = createWebViewPanel(mapHtmlPath, webEngineState)
+            if (mapResourceUrl == null) {
+                println("❌ map/map.html was not found on the application classpath.")
+                return@runLater
+            }
+            println("🗺️ Loading map resource from: ${mapResourceUrl.toExternalForm()}")
+            val panel = createWebViewPanel(mapResourceUrl.toExternalForm(), webEngineState)
             panelState.value = panel
         }
     }
@@ -502,30 +510,47 @@ fun createWebViewPanel(url: String, webEngineState: MutableState<WebEngine?>): J
         webEngine.onAlert = EventHandler { event ->
             println("🖥️ JavaScript Console: ${event.data}")
         }
+        webEngine.loadWorker.exceptionProperty().addListener { _, _, ex ->
+            if (ex != null) {
+                println("❌ Map load exception: ${ex.javaClass.simpleName}: ${ex.message}")
+            }
+        }
         webEngineState.value = webEngine
 
         panel.scene = Scene(webView)
 
         val bridge = JavaScriptBridge(webEngine)
         webEngine.loadWorker.stateProperty().addListener { _, _, newState ->
-            if (newState == javafx.concurrent.Worker.State.SUCCEEDED) {
-                val window = webEngine.executeScript("window") as JSObject
-                window.setMember("javafx", bridge)
-                println("✅ JavaFX Bridge Injected!")
-                webEngine.executeScript(
-                    """
+            when (newState) {
+                Worker.State.SUCCEEDED -> {
+                    println("✅ Map HTML loaded: $url")
+                    val window = webEngine.executeScript("window") as JSObject
+                    window.setMember("javafx", bridge)
+                    println("✅ JavaFX Bridge Injected!")
+                    webEngine.executeScript(
+                        """
             var style = document.createElement('style');
             style.innerHTML = 'body::-webkit-scrollbar { display: none; } body { overflow: hidden; }';
             document.head.appendChild(style);
             """.trimIndent()
-                )
-                webEngine.executeScript(
-                    """
+                    )
+                    webEngine.executeScript(
+                        """
             if (typeof resetMapLayout === "function") {
                 resetMapLayout();
             }
             """.trimIndent()
-                )
+                    )
+                }
+                Worker.State.FAILED -> {
+                    val ex = webEngine.loadWorker.exception
+                    println("❌ Map failed to load from $url")
+                    if (ex != null) {
+                        println("❌ Failure cause: ${ex.javaClass.name}: ${ex.message}")
+                    }
+                }
+                Worker.State.CANCELLED -> println("⚠️ Map load cancelled for $url")
+                else -> Unit
             }
         }
 
