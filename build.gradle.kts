@@ -56,7 +56,8 @@ compose.desktop {
             modules(
                 "java.desktop",
                 "java.net.http",
-                "jdk.unsupported.desktop"
+                // Required by JavaFX Marlin renderer (uses sun.misc.Unsafe).
+                "jdk.unsupported"
             )
             targetFormats(
                 TargetFormat.Exe,
