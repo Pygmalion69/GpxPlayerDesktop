@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "org.nitri"
-val appVersion = "1.0.7"
+val appVersion = "1.0.4"
 val javafxVersion = "21.0.2"
 val windowsUpgradeUuid = "0a0e95b7-8c46-4cb0-8c82-c4e540b1d92c"
 version = appVersion
