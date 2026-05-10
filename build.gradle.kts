@@ -1,5 +1,4 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-import java.util.UUID
 
 plugins {
     kotlin("jvm")
@@ -9,8 +8,9 @@ plugins {
 }
 
 group = "org.nitri"
-val appVersion = "1.0.4"
+val appVersion = "1.0.7"
 val javafxVersion = "21.0.2"
+val windowsUpgradeUuid = "0a0e95b7-8c46-4cb0-8c82-c4e540b1d92c"
 version = appVersion
 
 repositories {
@@ -25,6 +25,10 @@ java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
 }
+
+val nativePackageJavaHome = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}.map { it.metadata.installationPath.asFile.absolutePath }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     compilerOptions {
@@ -52,12 +56,16 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "MainKt"
+        javaHome = nativePackageJavaHome.get()
         nativeDistributions {
             modules(
                 "java.desktop",
+                "jdk.httpserver",
                 "java.net.http",
                 // Required by JavaFX Marlin renderer (uses sun.misc.Unsafe).
-                "jdk.unsupported"
+                "jdk.unsupported",
+                // Required by javafx.swing/JFXPanel on Windows for Swing event interop.
+                "jdk.unsupported.desktop"
             )
             targetFormats(
                 TargetFormat.Exe,
@@ -69,7 +77,7 @@ compose.desktop {
             }
             windows {
                 menuGroup = "Gpx Tools"
-                upgradeUuid = UUID.randomUUID().toString()
+                upgradeUuid = windowsUpgradeUuid
                 iconFile.set(project.file("assets/GpxPlayer.ico"))
             }
         }

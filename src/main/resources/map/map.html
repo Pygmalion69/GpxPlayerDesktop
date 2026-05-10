@@ -11,26 +11,14 @@
             console.log("❌ JavaScript Error: " + message + " at " + source + ":" + lineno);
         };
     </script>
-    <script>
-        function notifyKotlin() {
-
-           if (window.javafx) {
-            console.log("✅ Sending message to Kotlin...");
-            window.javafx.postMessage("Leaflet Ready");
-        } else {
-              console.log("⏳ Waiting for Kotlin bridge...");
-             setTimeout(notifyKotlin, 500); // Try again after 500ms
-       }
-       }
-       document.addEventListener("DOMContentLoaded", function () {
-           console.log("✅ Leaflet is now available!");
-            notifyKotlin();
-       });
-    </script>
     <style>
         html, body {
             height: 100%;
             margin: 0;
+            overflow: hidden;
+        }
+        body::-webkit-scrollbar {
+            display: none;
         }
         #map-root {
             position: relative;
@@ -280,6 +268,27 @@
     }
 
     var polyline;
+    var pendingTrackCoords = [];
+
+    function beginGpxTrack() {
+        pendingTrackCoords = [];
+        if (polyline) {
+            map.removeLayer(polyline);
+            polyline = null;
+        }
+    }
+
+    function appendGpxTrackPoints(points) {
+        if (!Array.isArray(points) || points.length === 0) return;
+        pendingTrackCoords = pendingTrackCoords.concat(points);
+    }
+
+    function finishGpxTrack() {
+        if (typeof map === "undefined" || pendingTrackCoords.length === 0) return;
+        polyline = L.polyline(pendingTrackCoords, { color: 'blue' }).addTo(map);
+        map.fitBounds(polyline.getBounds());
+        pendingTrackCoords = [];
+    }
 
     function zoomInMap() {
         if (typeof map !== "undefined") {
@@ -300,8 +309,101 @@
         invalidateMapSize();
     }
 
+    function drawGpxTrack(points) {
+        if (polyline) {
+            map.removeLayer(polyline);
+            polyline = null;
+        }
+        if (!Array.isArray(points) || points.length === 0) return;
+        polyline = L.polyline(points, { color: 'blue' }).addTo(map);
+        map.fitBounds(polyline.getBounds());
+    }
+
+    var url = new URL(window.location.href);
+    var statePort = url.searchParams.get('statePort') || new URLSearchParams(url.hash.substring(1)).get('statePort');
+    var lastTrackRevision = -1;
+    var lastVehicleRevision = -1;
+    var lastCenterCrossRevision = -1;
+    var lastResetRevision = -1;
+    var lastZoomRevision = -1;
+    var lastTargetCenterRevision = -1;
+
+    function applyMapState(state) {
+        if (!state) return;
+
+        if (state.resetRevision !== lastResetRevision) {
+            lastResetRevision = state.resetRevision;
+            resetMapLayout();
+        }
+
+        if (state.targetCenterRevision !== lastTargetCenterRevision) {
+            lastTargetCenterRevision = state.targetCenterRevision;
+            if (state.targetCenter) {
+                lastLat = state.targetCenter.lat;
+                lastLon = state.targetCenter.lon;
+                map.setView([lastLat, lastLon], map.getZoom(), { animate: false });
+            }
+        }
+
+        if (state.trackRevision !== lastTrackRevision) {
+            lastTrackRevision = state.trackRevision;
+            if (state.track) {
+                drawGpxTrack(state.track);
+            }
+        }
+
+        if (state.vehicleRevision !== lastVehicleRevision) {
+            lastVehicleRevision = state.vehicleRevision;
+            if (state.vehicle && state.vehicle.visible) {
+                updateVehicle(
+                    state.vehicle.lat,
+                    state.vehicle.lon,
+                    state.vehicle.heading,
+                    state.vehicle.headingUp,
+                    state.vehicle.follow
+                );
+            } else {
+                hideVehicle();
+            }
+        }
+
+        if (state.centerCrossRevision !== lastCenterCrossRevision) {
+            lastCenterCrossRevision = state.centerCrossRevision;
+            if (state.centerCrossVisible) {
+                showCenterCross();
+            } else {
+                hideCenterCross();
+            }
+        }
+
+        if (state.zoomRevision !== lastZoomRevision) {
+            lastZoomRevision = state.zoomRevision;
+            if (state.zoomDelta > 0) {
+                zoomInMap();
+            } else if (state.zoomDelta < 0) {
+                zoomOutMap();
+            }
+        }
+    }
+
+    function pollMapState() {
+        if (!statePort) return;
+        var center = map.getCenter();
+        var url = 'http://127.0.0.1:' + statePort +
+            '/state?trackRevision=' + encodeURIComponent(lastTrackRevision) +
+            '&lat=' + encodeURIComponent(center.lat) +
+            '&lon=' + encodeURIComponent(center.lng);
+
+        fetch(url, { cache: 'no-store' })
+            .then(function (response) { return response.json(); })
+            .then(applyMapState)
+            .catch(function (error) { console.log('Map state fetch failed: ' + error); })
+            .finally(function () { setTimeout(pollMapState, 100); });
+    }
+
     setTimeout(resetMapLayout, 0);
     setTimeout(resetMapLayout, 150);
+    setTimeout(pollMapState, 100);
 
 
 </script>

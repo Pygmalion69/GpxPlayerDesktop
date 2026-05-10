@@ -24,16 +24,21 @@ import javafx.scene.Scene
 import javafx.concurrent.Worker
 import javafx.scene.web.WebEngine
 import javafx.scene.web.WebView
-import netscape.javascript.JSObject
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
 import org.w3c.dom.Document
 import java.awt.KeyboardFocusManager
 import java.io.File
+import java.net.InetSocketAddress
 import java.net.URI
+import java.net.URLDecoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Executors
 import java.util.prefs.Preferences
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -49,6 +54,7 @@ import kotlin.math.sqrt
 const val DEFAULT_MAP_LAT = 51.78962
 const val DEFAULT_MAP_LON = 6.14120
 const val IP_GEOLOCATION_URL = "https://ipapi.co/json/"
+const val MAX_MAP_TRACK_POINTS = 3000
 
 var firstIntentSent = false
 var lastIntentSentTime = 0L
@@ -64,6 +70,8 @@ private var currentVehicleHeadingDeg = 0.0
 private val initialMapCenterRequested = AtomicBoolean(false)
 private val approximateUserLocation = AtomicReference<Pair<Double, Double>?>(null)
 
+private val mapBridge: MapStateServer by lazy { MapStateServer().also { it.start() } }
+
 enum class DriveMode {
     GPX,
     FREE_DRIVE
@@ -77,7 +85,165 @@ fun saveAdbPath(path: String) {
     prefs.put("adb_path", path)
 }
 
+private class MapStateServer {
+    private val lock = Any()
+    private lateinit var server: HttpServer
+
+    var port: Int = 0
+        private set
+
+    private var mapTrack: List<Pair<Double, Double>> = emptyList()
+    private var trackRevision = 0L
+    private var vehicleRevision = 0L
+    private var vehicleVisible = false
+    private var vehicleLat = DEFAULT_MAP_LAT
+    private var vehicleLon = DEFAULT_MAP_LON
+    private var vehicleHeading = 0.0
+    private var vehicleHeadingUp = false
+    private var vehicleFollow = false
+    private var centerCrossRevision = 0L
+    private var centerCrossVisible = false
+    private var resetRevision = 0L
+    private var zoomRevision = 0L
+    private var zoomDelta = 0
+    private var targetCenterRevision = 0L
+    private var targetCenterLat = DEFAULT_MAP_LAT
+    private var targetCenterLon = DEFAULT_MAP_LON
+    private var lastMapCenter = Pair(DEFAULT_MAP_LAT, DEFAULT_MAP_LON)
+
+    fun start() {
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/state") { exchange -> handleState(exchange) }
+        server.executor = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "map-state-server").apply { isDaemon = true }
+        }
+        server.start()
+        port = server.address.port
+        Runtime.getRuntime().addShutdownHook(Thread { server.stop(0) })
+        println("Map state server listening on 127.0.0.1:$port")
+    }
+
+    fun setTrack(points: List<Pair<Double, Double>>) = synchronized(lock) {
+        mapTrack = points
+        trackRevision++
+    }
+
+    fun updateVehicle(lat: Double, lon: Double, heading: Double, headingUp: Boolean, follow: Boolean) = synchronized(lock) {
+        vehicleVisible = true
+        vehicleLat = lat
+        vehicleLon = lon
+        vehicleHeading = heading
+        vehicleHeadingUp = headingUp
+        vehicleFollow = follow
+        vehicleRevision++
+    }
+
+    fun hideVehicle() = synchronized(lock) {
+        vehicleVisible = false
+        vehicleRevision++
+    }
+
+    fun showCenterCross(show: Boolean) = synchronized(lock) {
+        centerCrossVisible = show
+        centerCrossRevision++
+    }
+
+    fun resetFrame() = synchronized(lock) {
+        resetRevision++
+    }
+
+    fun zoom(delta: Int) = synchronized(lock) {
+        zoomDelta = delta
+        zoomRevision++
+    }
+
+    fun setTargetCenter(lat: Double, lon: Double) = synchronized(lock) {
+        targetCenterLat = lat
+        targetCenterLon = lon
+        targetCenterRevision++
+    }
+
+    fun lastCenter(): Pair<Double, Double> = synchronized(lock) { lastMapCenter }
+
+    private fun handleState(exchange: HttpExchange) {
+        try {
+            val query = parseQuery(exchange.requestURI.rawQuery.orEmpty())
+            val lat = query["lat"]?.toDoubleOrNull()
+            val lon = query["lon"]?.toDoubleOrNull()
+            if (lat != null && lon != null) {
+                synchronized(lock) {
+                    lastMapCenter = Pair(lat, lon)
+                }
+            }
+
+            val clientTrackRevision = query["trackRevision"]?.toLongOrNull() ?: -1L
+            val response = synchronized(lock) {
+                buildJsonState(includeTrack = clientTrackRevision != trackRevision)
+            }
+            val bytes = response.toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", "application/json; charset=utf-8")
+            exchange.responseHeaders.add("Access-Control-Allow-Origin", "*")
+            exchange.responseHeaders.add("Cache-Control", "no-store")
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        } catch (e: Exception) {
+            val bytes = """{"error":"state unavailable"}""".toByteArray(StandardCharsets.UTF_8)
+            exchange.sendResponseHeaders(500, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        } finally {
+            exchange.close()
+        }
+    }
+
+    private fun buildJsonState(includeTrack: Boolean): String = buildString {
+        append('{')
+        append("\"trackRevision\":").append(trackRevision)
+        if (includeTrack) {
+            append(",\"track\":[")
+            mapTrack.forEachIndexed { index, point ->
+                if (index > 0) append(',')
+                append('[').append(point.first).append(',').append(point.second).append(']')
+            }
+            append(']')
+        }
+        append(",\"vehicleRevision\":").append(vehicleRevision)
+        append(",\"vehicle\":{")
+        append("\"visible\":").append(vehicleVisible)
+        append(",\"lat\":").append(vehicleLat)
+        append(",\"lon\":").append(vehicleLon)
+        append(",\"heading\":").append(vehicleHeading)
+        append(",\"headingUp\":").append(vehicleHeadingUp)
+        append(",\"follow\":").append(vehicleFollow)
+        append('}')
+        append(",\"centerCrossRevision\":").append(centerCrossRevision)
+        append(",\"centerCrossVisible\":").append(centerCrossVisible)
+        append(",\"resetRevision\":").append(resetRevision)
+        append(",\"zoomRevision\":").append(zoomRevision)
+        append(",\"zoomDelta\":").append(zoomDelta)
+        append(",\"targetCenterRevision\":").append(targetCenterRevision)
+        append(",\"targetCenter\":{")
+        append("\"lat\":").append(targetCenterLat)
+        append(",\"lon\":").append(targetCenterLon)
+        append('}')
+        append('}')
+    }
+
+    private fun parseQuery(rawQuery: String): Map<String, String> {
+        if (rawQuery.isBlank()) return emptyMap()
+        return rawQuery.split('&')
+            .mapNotNull { part ->
+                val separator = part.indexOf('=')
+                if (separator < 0) return@mapNotNull null
+                val key = URLDecoder.decode(part.substring(0, separator), StandardCharsets.UTF_8)
+                val value = URLDecoder.decode(part.substring(separator + 1), StandardCharsets.UTF_8)
+                key to value
+            }
+            .toMap()
+    }
+}
+
 fun initializeJavaFX() {
+    mapBridge
     if (!Platform.isFxApplicationThread()) {
         Platform.startup {}
     }
@@ -165,21 +331,17 @@ fun App() {
     }
 
     fun setFreeDrivePositionFromCenter() {
-        val engine = webEngine.value ?: return
-        Platform.runLater {
-            val lat = (engine.executeScript("getMapCenterLat()") as? Number)?.toDouble()
-            val lon = (engine.executeScript("getMapCenterLon()") as? Number)?.toDouble()
-            if (lat == null || lon == null) return@runLater
-            val initialHeading = currentVehicleHeadingDeg
-            freeDriveController.start(Pair(lat, lon), initialHeading)
-            freeDriveSpeed = freeDriveController.speedKmh
-            freeDriveHeading = freeDriveController.headingDeg
-            freeDrivePositionSet = true
-            hideCenterCross(engine)
-            updateVehicleState(lat, lon, freeDriveHeading)
-            updateVehicleOnMap(engine, lat, lon, freeDriveHeading, headingUp = true, follow = true)
-            logMessages = logMessages + "Free drive position set."
-        }
+        if (webEngine.value == null) return
+        val (lat, lon) = mapBridge.lastCenter()
+        val initialHeading = currentVehicleHeadingDeg
+        freeDriveController.start(Pair(lat, lon), initialHeading)
+        freeDriveSpeed = freeDriveController.speedKmh
+        freeDriveHeading = freeDriveController.headingDeg
+        freeDrivePositionSet = true
+        hideCenterCross(webEngine.value)
+        updateVehicleState(lat, lon, freeDriveHeading)
+        updateVehicleOnMap(webEngine.value, lat, lon, freeDriveHeading, headingUp = true, follow = true)
+        logMessages = logMessages + "Free drive position set."
     }
 
     fun clearFreeDrivePosition() {
@@ -485,8 +647,9 @@ fun MapView(webEngineState: MutableState<WebEngine?>, modifier: Modifier = Modif
                 println("❌ map/map.html was not found on the application classpath.")
                 return@runLater
             }
-            println("🗺️ Loading map resource from: ${mapResourceUrl.toExternalForm()}")
-            val panel = createWebViewPanel(mapResourceUrl.toExternalForm(), webEngineState)
+            val mapUrl = "${mapResourceUrl.toExternalForm()}#statePort=${mapBridge.port}"
+            println("🗺️ Loading map resource from: $mapUrl")
+            val panel = createWebViewPanel(mapUrl, webEngineState)
             panelState.value = panel
         }
     }
@@ -519,28 +682,11 @@ fun createWebViewPanel(url: String, webEngineState: MutableState<WebEngine?>): J
 
         panel.scene = Scene(webView)
 
-        val bridge = JavaScriptBridge(webEngine)
         webEngine.loadWorker.stateProperty().addListener { _, _, newState ->
             when (newState) {
                 Worker.State.SUCCEEDED -> {
                     println("✅ Map HTML loaded: $url")
-                    val window = webEngine.executeScript("window") as JSObject
-                    window.setMember("javafx", bridge)
-                    println("✅ JavaFX Bridge Injected!")
-                    webEngine.executeScript(
-                        """
-            var style = document.createElement('style');
-            style.innerHTML = 'body::-webkit-scrollbar { display: none; } body { overflow: hidden; }';
-            document.head.appendChild(style);
-            """.trimIndent()
-                    )
-                    webEngine.executeScript(
-                        """
-            if (typeof resetMapLayout === "function") {
-                resetMapLayout();
-            }
-            """.trimIndent()
-                    )
+                    println("✅ Map WebView ready.")
                 }
                 Worker.State.FAILED -> {
                     val ex = webEngine.loadWorker.exception
@@ -589,29 +735,31 @@ fun parseGpxFile(filePath: String): List<Pair<Double, Double>> {
 }
 
 fun sendGpxToMap(webEngine: WebEngine?, trackPoints: List<Pair<Double, Double>>) {
+    if (webEngine == null) return
     if (trackPoints.isEmpty()) return
 
-    val trackJson = trackPoints.joinToString(",") { "[${it.first}, ${it.second}]" }
-    val jsCommand = """
-        console.log("📡 Receiving GPX Data...");
-        var trackCoords = [$trackJson];
-        if (typeof map !== "undefined") {
-            var polyline = L.polyline(trackCoords, {color: 'blue'}).addTo(map);
-            map.fitBounds(polyline.getBounds());
-        } else {
-            console.error("❌ Leaflet map not found!");
-        }
-    """.trimIndent()
-
-    Platform.runLater {
-        webEngine?.executeScript(jsCommand)
-    }
+    val mapTrack = prepareTrackForMap(trackPoints)
+    println("Publishing ${mapTrack.size} GPX map points to map state.")
+    mapBridge.setTrack(mapTrack)
 }
 
-fun sendJavaScriptCommand(webEngine: WebEngine?, command: String) {
-    Platform.runLater {
-        webEngine?.executeScript(command)
+private fun prepareTrackForMap(trackPoints: List<Pair<Double, Double>>): List<Pair<Double, Double>> {
+    val deduplicated = trackPoints.fold(mutableListOf<Pair<Double, Double>>()) { points, point ->
+        if (points.lastOrNull() != point) {
+            points.add(point)
+        }
+        points
     }
+
+    if (deduplicated.size <= MAX_MAP_TRACK_POINTS) return deduplicated
+
+    val step = kotlin.math.ceil(deduplicated.size.toDouble() / MAX_MAP_TRACK_POINTS).toInt()
+    val sampled = deduplicated.filterIndexed { index, _ -> index % step == 0 }.toMutableList()
+    val lastPoint = deduplicated.last()
+    if (sampled.lastOrNull() != lastPoint) {
+        sampled.add(lastPoint)
+    }
+    return sampled
 }
 
 fun maybeCenterMapToApproximateLocation(webEngine: WebEngine) {
@@ -622,14 +770,7 @@ fun maybeCenterMapToApproximateLocation(webEngine: WebEngine) {
         Platform.runLater {
             if (refinedTrackPoints.isNotEmpty() || currentVehicleLatLon != null) return@runLater
             val (lat, lon) = location ?: Pair(DEFAULT_MAP_LAT, DEFAULT_MAP_LON)
-            val jsCommand = """
-                if (typeof map !== "undefined") {
-                    lastLat = $lat;
-                    lastLon = $lon;
-                    map.setView([$lat, $lon], map.getZoom(), { animate: false });
-                }
-            """.trimIndent()
-            webEngine.executeScript(jsCommand)
+            mapBridge.setTargetCenter(lat, lon)
         }
     }, "ip-geolocation").apply { isDaemon = true }.start()
 }
@@ -671,19 +812,13 @@ fun parseLatLon(json: String): Pair<Double, Double>? {
 }
 
 fun zoomMap(webEngine: WebEngine?, zoomIn: Boolean) {
-    val jsCommand = if (zoomIn) "zoomInMap();" else "zoomOutMap();"
-    sendJavaScriptCommand(webEngine, jsCommand)
+    if (webEngine == null) return
+    mapBridge.zoom(if (zoomIn) 1 else -1)
 }
 
 fun resetMapFrame(webEngine: WebEngine?) {
-    val jsCommand = """
-        if (typeof setSquareMode === "function") {
-            setSquareMode(false);
-            if (typeof updateMapOversize === "function") { updateMapOversize(); }
-            if (typeof applyMapRotation === "function") { applyMapRotation(0); }
-        }
-    """.trimIndent()
-    sendJavaScriptCommand(webEngine, jsCommand)
+    if (webEngine == null) return
+    mapBridge.resetFrame()
 }
 
 @Composable
@@ -727,22 +862,23 @@ fun updateVehicleOnMap(
     headingUp: Boolean,
     follow: Boolean
 ) {
-    val jsCommand = """
-        updateVehicle($lat, $lon, $headingDeg, ${headingUp.toString()}, ${follow.toString()});
-    """.trimIndent()
-    sendJavaScriptCommand(webEngine, jsCommand)
+    if (webEngine == null) return
+    mapBridge.updateVehicle(lat, lon, headingDeg, headingUp, follow)
 }
 
 fun hideVehicleOnMap(webEngine: WebEngine?) {
-    sendJavaScriptCommand(webEngine, "hideVehicle();")
+    if (webEngine == null) return
+    mapBridge.hideVehicle()
 }
 
 fun showCenterCross(webEngine: WebEngine?) {
-    sendJavaScriptCommand(webEngine, "showCenterCross();")
+    if (webEngine == null) return
+    mapBridge.showCenterCross(true)
 }
 
 fun hideCenterCross(webEngine: WebEngine?) {
-    sendJavaScriptCommand(webEngine, "hideCenterCross();")
+    if (webEngine == null) return
+    mapBridge.showCenterCross(false)
 }
 
 fun headingForIndex(index: Int): Double {
@@ -857,7 +993,7 @@ fun refineTrack(trackPoints: List<Pair<Double, Double>>, intervalMeters: Double 
     val refined = mutableListOf<Pair<Double, Double>>()
     var prev = trackPoints[0]
     refined.add(prev)
-    println("✅ First track point added: ${prev.first}, ${prev.second}")
+    var interpolatedCount = 0
 
     for (i in 1 until trackPoints.size) {
         val curr = trackPoints[i]
@@ -873,15 +1009,15 @@ fun refineTrack(trackPoints: List<Pair<Double, Double>>, intervalMeters: Double 
                 val lat = prev.first + (j * fraction * deltaLat)
                 val lon = prev.second + (j * fraction * deltaLon)
                 refined.add(Pair(lat, lon))
-                println("🆕 Interpolated point: $lat, $lon")
+                interpolatedCount++
             }
         }
 
         refined.add(curr)
-        println("✅ Original point added: ${curr.first}, ${curr.second}")
         prev = curr
     }
 
+    println("Refined GPX track: ${trackPoints.size} original points, $interpolatedCount interpolated points, ${refined.size} playback points.")
     return refined
 }
 
@@ -990,21 +1126,3 @@ fun main() = application {
     }
 }
 
-class JavaScriptBridge(private val webEngine: WebEngine) {
-    // Caution: ignore the never used warning!
-    fun postMessage(message: String) {
-        if (message == "Leaflet Ready") {
-            println("✅ Leaflet is now fully loaded!")
-            maybeCenterMapToApproximateLocation(webEngine)
-
-            // Now we can safely execute JavaScript commands
-//            Platform.runLater {
-//                webEngine.executeScript("""
-//                    console.log("✅ Running JavaScript after Leaflet Ready!");
-//                    L.marker([51.78962, 6.14120]).addTo(map)
-//                        .bindPopup("📍 Kotlin-Controlled Marker!").openPopup();
-//                """.trimIndent())
-//            }
-        }
-    }
-}
