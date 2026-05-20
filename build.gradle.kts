@@ -58,16 +58,12 @@ compose.desktop {
         mainClass = "MainKt"
         javaHome = nativePackageJavaHome.get()
         nativeDistributions {
+            // Keep explicit JDK modules and let Compose include dependency modules (JavaFX).
+            includeAllModules = true
             modules(
                 "java.desktop",
                 "jdk.httpserver",
                 "java.net.http",
-                // JavaFX runtime modules required at package runtime.
-                "javafx.base",
-                "javafx.graphics",
-                "javafx.controls",
-                "javafx.swing",
-                "javafx.web",
                 // Required by JavaFX Marlin renderer (uses sun.misc.Unsafe).
                 "jdk.unsupported",
                 // Required by javafx.swing/JFXPanel on Windows for Swing event interop.
