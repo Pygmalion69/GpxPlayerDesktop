@@ -58,6 +58,8 @@ compose.desktop {
         mainClass = "MainKt"
         javaHome = nativePackageJavaHome.get()
         nativeDistributions {
+            // Keep explicit JDK modules and let Compose include dependency modules (JavaFX).
+            includeAllModules = true
             modules(
                 "java.desktop",
                 "jdk.httpserver",
