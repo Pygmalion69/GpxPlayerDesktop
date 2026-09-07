@@ -35,11 +35,27 @@ jobs:
       - name: 🧪 Build project
         run: ./gradlew build
 
-      - name: 📦 Package app
-        run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace
+      - name: 📦 Build installer and portable app
+        run: ./gradlew packageDistributionForCurrentOS createDistributable --stacktrace
+
+      - name: 🗜️ Archive portable app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build/distributions
+          Compress-Archive -Path build/compose/binaries/main/app/GpxPlayer -DestinationPath build/distributions/GpxPlayer-windows-portable.zip
+
+      - name: 🗜️ Archive portable app (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p build/distributions
+          tar -C build/compose/binaries/main/app -czf build/distributions/GpxPlayer-linux-portable.tar.gz GpxPlayer
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ runner.os }}
-          path: build/compose/binaries
+          path: |
+            build/distributions/*
+            build/compose/binaries/main/exe/*.exe
+            build/compose/binaries/main/deb/*.deb
