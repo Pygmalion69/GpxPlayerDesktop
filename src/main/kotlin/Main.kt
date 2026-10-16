@@ -58,10 +58,12 @@ const val MAX_MAP_TRACK_POINTS = 3000
 
 var firstIntentSent = false
 var lastIntentSentTime = 0L
+@Volatile
 var currentIndex = 0
 var refinedTrackPoints = listOf<Pair<Double, Double>>()
 var adbPath = "/usr/bin/adb"
 
+@Volatile
 private var playbackTimer: Timer? = null
 
 private var currentVehicleLatLon: Pair<Double, Double>? = null
@@ -453,7 +455,13 @@ fun App() {
                 Text("Speed: ${speed.toInt()} km/h")
                 Slider(
                     value = speed,
-                    onValueChange = { speed = it },
+                    onValueChange = {
+                        speed = it
+                        if (speed.toInt() > 0) paused = false
+                        if (playing.value) {
+                            playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
+                        }
+                    },
                     valueRange = 0f..130f,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -499,6 +507,7 @@ fun App() {
                                 playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
                             } else {
                                 paused = !paused
+                                playGpxFile(webEngine.value, { speed.toInt() }, { paused }, position, playing)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(contentColor = Color.White),
@@ -1051,39 +1060,56 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
     firstIntentSent = false
 
     playbackTimer?.cancel()
-    playbackTimer = Timer("playback-timer", true)
+    val timer = Timer("playback-timer", true)
+    playbackTimer = timer
 
     fun scheduleNextStep() {
+        if (playbackTimer !== timer) return
         if (!playing.value || currentIndex >= refinedTrackPoints.size - 1) {
             println("✅ Playback finished.")
             stopPlayGpxFile(webEngine, position, playing, false)
             return
         }
 
-        val (lat1, lon1) = refinedTrackPoints[currentIndex]
-        val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
+        val stepIndex = currentIndex
+        val (lat1, lon1) = refinedTrackPoints[stepIndex]
+        val (lat2, lon2) = refinedTrackPoints[stepIndex + 1]
         val distance = calculateDistance(lat1, lon1, lat2, lon2)
-        val interval = ((distance / (speedProvider().coerceAtLeast(1) / 3.6)) * 1000).toLong()
+        val step = gpxPlaybackStep(distance, speedProvider(), pausedProvider())
+        val interval = step.intervalMillis
 
         webEngine?.let { engine ->
-            moveMarkerToCurrentIndex(engine, speedProvider().coerceAtLeast(1), interval) // avoid division by zero
+            moveMarkerToCurrentIndex(engine, step.speedKmh, interval)
         }
 
         if (!firstIntentSent || System.currentTimeMillis() - lastIntentSentTime > 800) {
-            sendIntent(lat1, lon1, speedProvider().coerceAtLeast(1))
+            sendIntent(lat1, lon1, step.speedKmh)
             firstIntentSent = true
             lastIntentSentTime = System.currentTimeMillis()
         }
 
-        if (!pausedProvider()) {
-            currentIndex++
-        }
+        if (playbackTimer !== timer) return
 
         position.value = ((currentIndex.toFloat() / (refinedTrackPoints.size - 1)) * 100f)
 
         // Schedule next step dynamically
-        playbackTimer?.schedule(object : TimerTask() {
+        // A speed change or stop may have replaced this timer while ADB was running.
+        if (playbackTimer !== timer) return
+        timer.schedule(object : TimerTask() {
             override fun run() {
+                if (playbackTimer !== timer || !playing.value) return
+                // The interval is travel time to the next point, not a delay after moving.
+                // A seek or pause while waiting must not advance the old segment.
+                if (step.advance && currentIndex == stepIndex &&
+                    speedProvider() > 0 && !pausedProvider()) {
+                    currentIndex = stepIndex + 1
+                    position.value = currentIndex.toFloat() / refinedTrackPoints.lastIndex * 100f
+                    if (currentIndex == refinedTrackPoints.lastIndex) {
+                        moveMarkerToIndex(webEngine, currentIndex, headingUp = false, follow = false)
+                        val (lat, lon) = refinedTrackPoints[currentIndex]
+                        sendIntent(lat, lon, speedProvider())
+                    }
+                }
                 scheduleNextStep()
             }
         }, interval)
