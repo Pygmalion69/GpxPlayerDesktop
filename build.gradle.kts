@@ -85,3 +85,14 @@ compose.desktop {
         }
     }
 }
+
+val playbackRegressionTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks GPX zero-speed, pause, seek and resume behavior without a device."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("GpxPlaybackRegressionKt")
+}
+
+tasks.named("check") {
+    dependsOn(playbackRegressionTest)
+}
