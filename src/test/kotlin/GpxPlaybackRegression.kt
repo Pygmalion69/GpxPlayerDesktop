@@ -54,5 +54,31 @@ fun main() {
     } finally {
         stopPlayGpxFile(null, position, playing, true)
     }
+    // Repeated slider callbacks must not move before the segment travel time.
+    refinedTrackPoints = List(10) { 51.0 + it * 0.00009 to 6.0 } // About 10 m apart.
+    currentIndex = 0
+    position.value = 0f
+    speed.set(0)
+    isPaused.set(false)
+    try {
+        playGpxFile(null, { speed.get() }, { isPaused.get() }, position, playing)
+        speed.set(2) // About 18 seconds per segment.
+        repeat(20) {
+            playGpxFile(null, { speed.get() }, { isPaused.get() }, position, playing)
+        }
+        Thread.sleep(250)
+        check(currentIndex == 0 && position.value == 0f) {
+            "Slider updates advanced the position before travel time elapsed"
+        }
+        isPaused.set(true)
+        playGpxFile(null, { speed.get() }, { isPaused.get() }, position, playing)
+        isPaused.set(false)
+        repeat(10) {
+            playGpxFile(null, { speed.get() }, { isPaused.get() }, position, playing)
+        }
+        check(currentIndex == 0) { "Pause/resume skipped track points" }
+    } finally {
+        stopPlayGpxFile(null, position, playing, true)
+    }
     println("GPX playback regression checks passed")
 }

@@ -1071,8 +1071,9 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
             return
         }
 
-        val (lat1, lon1) = refinedTrackPoints[currentIndex]
-        val (lat2, lon2) = refinedTrackPoints[currentIndex + 1]
+        val stepIndex = currentIndex
+        val (lat1, lon1) = refinedTrackPoints[stepIndex]
+        val (lat2, lon2) = refinedTrackPoints[stepIndex + 1]
         val distance = calculateDistance(lat1, lon1, lat2, lon2)
         val step = gpxPlaybackStep(distance, speedProvider(), pausedProvider())
         val interval = step.intervalMillis
@@ -1089,10 +1090,6 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
 
         if (playbackTimer !== timer) return
 
-        if (step.advance) {
-            currentIndex++
-        }
-
         position.value = ((currentIndex.toFloat() / (refinedTrackPoints.size - 1)) * 100f)
 
         // Schedule next step dynamically
@@ -1100,6 +1097,19 @@ fun playGpxFile(webEngine: WebEngine?, speedProvider: () -> Int, pausedProvider:
         if (playbackTimer !== timer) return
         timer.schedule(object : TimerTask() {
             override fun run() {
+                if (playbackTimer !== timer || !playing.value) return
+                // The interval is travel time to the next point, not a delay after moving.
+                // A seek or pause while waiting must not advance the old segment.
+                if (step.advance && currentIndex == stepIndex &&
+                    speedProvider() > 0 && !pausedProvider()) {
+                    currentIndex = stepIndex + 1
+                    position.value = currentIndex.toFloat() / refinedTrackPoints.lastIndex * 100f
+                    if (currentIndex == refinedTrackPoints.lastIndex) {
+                        moveMarkerToIndex(webEngine, currentIndex, headingUp = false, follow = false)
+                        val (lat, lon) = refinedTrackPoints[currentIndex]
+                        sendIntent(lat, lon, speedProvider())
+                    }
+                }
                 scheduleNextStep()
             }
         }, interval)
