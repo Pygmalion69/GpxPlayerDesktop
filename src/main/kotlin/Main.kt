@@ -61,7 +61,7 @@ var lastIntentSentTime = 0L
 @Volatile
 var currentIndex = 0
 var refinedTrackPoints = listOf<Pair<Double, Double>>()
-var adbPath = "/usr/bin/adb"
+var adbPath = defaultAdbPath()
 
 @Volatile
 private var playbackTimer: Timer? = null
@@ -80,6 +80,16 @@ enum class DriveMode {
 }
 
 private val prefs = Preferences.userRoot().node("gpxplayer")
+
+fun defaultAdbPath(): String {
+    return if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        val userProfile = System.getenv("USERPROFILE")?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("user.home")
+        File(userProfile, "AppData/Local/Android/Sdk/platform-tools/adb.exe").path
+    } else {
+        "/usr/bin/adb"
+    }
+}
 
 fun getSavedAdbPath(): String? = prefs.get("adb_path", null)
 
@@ -289,7 +299,7 @@ fun App() {
         )
     }
 
-    adbPath = getSavedAdbPath() ?: "/usr/bin/adb"
+    adbPath = getSavedAdbPath() ?: defaultAdbPath()
     startAndroidApp()
 
     fun enterFreeDrive() {
